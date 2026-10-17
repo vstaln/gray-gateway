@@ -169,8 +169,8 @@ impl ExeWatch {
 fn skill_name_of(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     let trimmed = raw.trim_start();
-    if trimmed.starts_with("---") {
-        for line in trimmed[3..].lines() {
+    if let Some(front) = trimmed.strip_prefix("---") {
+        for line in front.lines() {
             if line.trim() == "---" {
                 break;
             }

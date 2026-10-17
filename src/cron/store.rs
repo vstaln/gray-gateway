@@ -713,16 +713,4 @@ impl CronStore {
         })
     }
 
-    #[cfg(test)]
-    fn set_next_run_for_test(&self, id: &str, ts: i64) -> anyhow::Result<()> {
-        with_jobs_lock(&self.lock_path(), || {
-            let mut raw = self.load_raw()?;
-            let mut jobs = Self::parse_jobs(&raw);
-            let Some(job) = jobs.iter_mut().find(|j| j.id == id) else {
-                anyhow::bail!("unknown cron job {id:?}");
-            };
-            job.next_run_at = Some(ts);
-            self.save_jobs(&mut raw, &jobs)
-        })
-    }
 }
