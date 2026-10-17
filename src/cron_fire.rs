@@ -252,6 +252,20 @@ fn completed(out: std::process::Output) -> ScriptOutcome {
     }
 }
 
+#[cfg(windows)]
+fn shell_path() -> Result<std::path::PathBuf, String> {
+    for name in ["bash.exe", "bash"] {
+        if let Some(hit) = std::env::var_os("PATH").and_then(|v| {
+            std::env::split_paths(&v)
+                .map(|d| d.join(name))
+                .find(|c| c.is_file())
+        }) {
+            return Ok(hit);
+        }
+    }
+    Err("no bash on PATH (Git Bash required)".to_string())
+}
+
 fn spawn_failure(script: &std::path::Path, e: &std::io::Error) -> ScriptOutcome {
     ScriptOutcome {
         ok: false,
@@ -266,11 +280,20 @@ async fn run_pre_script_with_timeout(
     timeout: std::time::Duration,
 ) -> ScriptOutcome {
     #[cfg(windows)]
-    let mut command = {
-        let script_fs = script.to_string_lossy().replace('\\', "/");
-        let mut cmd = tokio::process::Command::new("bash");
-        cmd.arg("-c").arg("exec \"$1\"").arg("sh").arg(script_fs);
-        cmd
+    let mut command = match shell_path() {
+        Ok(shell) => {
+            let script_fs = script.to_string_lossy().replace('\\', "/");
+            let mut cmd = tokio::process::Command::new(shell);
+            cmd.arg("-c").arg("exec \"$1\"").arg("sh").arg(script_fs);
+            cmd
+        }
+        Err(e) => {
+            return ScriptOutcome {
+                ok: false,
+                stdout: String::new(),
+                stderr_tail: format!("pre-script spawn failed: {e}"),
+            };
+        }
     };
     #[cfg(not(windows))]
     let mut command = tokio::process::Command::new(script);

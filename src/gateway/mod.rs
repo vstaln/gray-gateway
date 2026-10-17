@@ -70,8 +70,10 @@ async fn setup_platform(platform: Option<String>) -> anyhow::Result<()> {
     };
     if !crate::vendor::setup_apps(&home).contains(&name) {
         let out = crate::vendor::gray_cli(&["plugin", "install", "--yes", &name])?;
-        if !out.status.success() {
+        if !out.stderr.is_empty() {
             eprint!("{}", String::from_utf8_lossy(&out.stderr));
+        }
+        if !out.status.success() {
             anyhow::bail!("gray plugin install {name} failed ({})", out.status);
         }
         print!("{}", String::from_utf8_lossy(&out.stdout));
@@ -132,11 +134,11 @@ pub async fn run_cli(cmd: crate::GatewayCmd) -> anyhow::Result<()> {
             Ok(())
         }
         GatewayCmd::On => {
-            println!("{}", toggle(true));
+            println!("{}", tokio::task::spawn_blocking(|| toggle(true)).await?);
             Ok(())
         }
         GatewayCmd::Off => {
-            println!("{}", toggle(false));
+            println!("{}", tokio::task::spawn_blocking(|| toggle(false)).await?);
             Ok(())
         }
         GatewayCmd::Stop => {
@@ -149,7 +151,7 @@ pub async fn run_cli(cmd: crate::GatewayCmd) -> anyhow::Result<()> {
         }
         GatewayCmd::Install { no_start, print } => {
             let home = crate::vendor::gray_home()?;
-            let exe = crate::vendor::gray_bin();
+            let exe = crate::vendor::gray_bin_abs()?;
             println!("{}", service::install(&home, &exe, no_start, print)?);
             Ok(())
         }

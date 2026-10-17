@@ -44,6 +44,39 @@ pub fn ticker_line(health: &CronHealth, now: i64) -> String {
     out
 }
 
+pub fn format_cron_dashboard(
+    jobs: &[crate::cron::CronJob],
+    health: Option<&crate::cron::CronHealth>,
+    now: i64,
+) -> String {
+    if jobs.is_empty() {
+        return "no cron jobs — `gray cron add \"every 1h\" \"prompt\"` to create one".to_string();
+    }
+    let mut out = String::new();
+    for j in jobs {
+        let short_id: String = j.id.chars().take(8).collect();
+        out.push_str(&format!(
+            "• {} ({}) — {:?} — next {} — last {}\n",
+            j.name,
+            short_id,
+            j.schedule,
+            j.next_run_at
+                .map(|t| t.to_string())
+                .as_deref()
+                .unwrap_or("-"),
+            j.last_status
+                .map(|s| format!("{s:?}"))
+                .as_deref()
+                .unwrap_or("-"),
+        ));
+    }
+    match health {
+        Some(h) => out.push_str(&ticker_line(h, now)),
+        None => out.push_str("due jobs fire automatically in this session"),
+    }
+    out
+}
+
 pub fn add_warning(last_tick: Option<&TickStamp>, now: i64, chat_bound: bool) -> Option<String> {
     if chat_bound {
         return Some(

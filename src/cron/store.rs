@@ -712,5 +712,4 @@ impl CronStore {
             Ok(true)
         })
     }
-
 }

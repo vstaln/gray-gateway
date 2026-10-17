@@ -85,7 +85,9 @@ pub async fn run_foreground() -> anyhow::Result<()> {
     let mut poll = tokio::time::interval(Duration::from_secs(POLL_SECS));
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let exe_watch = crate::vendor::ExeWatch::capture();
-    let bare = false;
+    let bare = std::env::var("GRAY_BARE")
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false);
     let mut last_probe = std::time::Instant::now() - Duration::from_secs(30);
     let mut auto_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut stop_signal = stop_signal();
@@ -105,7 +107,13 @@ pub async fn run_foreground() -> anyhow::Result<()> {
                         break;
                     }
                     if auto_task.as_ref().is_none_or(|t| t.is_finished()) {
-                        auto_task = Some(tokio::spawn(auto_update_pass(bare)));
+                        use futures::FutureExt as _;
+                        if let Some(t) = auto_task.take()
+                            && let Some(Err(e)) = t.now_or_never()
+                        {
+                            log::warn!("gateway: auto-update pass task failed: {e}");
+                        }
+                        auto_task = Some(tokio::spawn(auto_update_pass(bare, home.clone())));
                     }
                 }
             }
@@ -148,25 +156,141 @@ pub async fn run_foreground() -> anyhow::Result<()> {
 }
 
 const POLL_SECS: u64 = 2;
+const AUTO_UPDATE_SECS: i64 = 6 * 3600;
 
-async fn auto_update_pass(bare: bool) {
+fn try_acquire_update_lock(home: &std::path::Path) -> Option<std::fs::File> {
+    let path = home.join("logs").join("update.lock");
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .ok()?;
+    match f.try_lock() {
+        Ok(()) => Some(f),
+        Err(std::fs::TryLockError::WouldBlock) => None,
+        Err(std::fs::TryLockError::Error(e)) => {
+            log::warn!("gateway: update lock unsupported ({e}); skipping pass");
+            None
+        }
+    }
+}
+
+fn stamp_due(path: &std::path::Path) -> bool {
+    let now = crate::cron::now_secs();
+    match std::fs::read_to_string(path)
+        .ok()
+        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("at").and_then(serde_json::Value::as_i64))
+    {
+        None => true,
+        Some(at) => now.checked_sub(at).is_none_or(|e| e >= AUTO_UPDATE_SECS),
+    }
+}
+
+fn output_tail(out: &std::process::Output) -> String {
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !err.trim().is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&err);
+    }
+    let t = text.trim();
+    t.chars()
+        .rev()
+        .take(300)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
+}
+
+async fn run_update_cmd(args: &[&str], timeout_secs: u64) -> Result<String, String> {
+    let bin = crate::vendor::gray_bin_abs().map_err(|e| e.to_string())?;
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        }
+        Ok(Ok(out)) => Err(format!("exit {}: {}", out.status, output_tail(&out))),
+        Ok(Err(e)) => Err(format!("spawn: {e:#}")),
+        Err(_) => Err(format!("timed out after {timeout_secs}s")),
+    }
+}
+
+async fn auto_update_pass(bare: bool, home: std::path::PathBuf) {
     if bare || cfg!(debug_assertions) || !crate::vendor::auto_update_enabled() {
         return;
     }
-    let mut cmd = tokio::process::Command::new(crate::vendor::gray_bin());
-    cmd.arg("update")
-        .arg("--everything")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    match tokio::time::timeout(std::time::Duration::from_secs(600), cmd.status()).await {
-        Ok(Ok(status)) if status.success() => {
-            log::debug!("gateway: auto-update pass ran")
-        }
-        Ok(Ok(status)) => log::info!("gateway: auto-update exited {status}"),
-        Ok(Err(e)) => log::warn!("gateway: auto-update spawn failed: {e:#}"),
-        Err(_) => log::warn!("gateway: auto-update timed out"),
+    let stamp = home.join("auto-update.json");
+    if !stamp_due(&stamp) {
+        return;
     }
+    if let Ok(v) = run_update_cmd(&["--version"], 15).await
+        && v.split_whitespace().nth(1) == Some("0.0.0")
+    {
+        return;
+    }
+    if try_acquire_update_lock(&home).is_none() {
+        return;
+    }
+    if !stamp_due(&stamp) {
+        return;
+    }
+    let gray = match run_update_cmd(&["update"], 600).await {
+        Ok(text) => text
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or("ok")
+            .to_string(),
+        Err(e) => format!("failed: {e}"),
+    };
+    let (mut updated, mut rebuilt, mut failed) = (0u64, 0u64, 0u64);
+    match run_update_cmd(&["plugin", "update", "all"], 600).await {
+        Ok(text) => {
+            for line in text.lines() {
+                if line.contains("updated to") {
+                    updated += 1;
+                } else if line.contains("rebuilt") {
+                    rebuilt += 1;
+                } else if line.contains("failed") {
+                    failed += 1;
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("gateway: auto-update plugin pass failed: {e}");
+            failed += 1;
+        }
+    }
+    let body = serde_json::json!({
+        "at": crate::cron::now_secs(),
+        "gray": gray,
+        "plugins": {"updated": updated, "rebuilt": rebuilt, "failed": failed},
+    });
+    let lock_path = home.join("logs").join("update.lock");
+    let _guard = tokio::task::spawn_blocking(move || {
+        crate::vendor::lock_file_at(&lock_path, std::time::Duration::from_secs(30))
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten();
+    let tmp = stamp.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    if std::fs::write(&tmp, body.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &stamp);
+    }
+    log::info!(
+        "gateway: auto-update pass — gray: {gray}; plugins: {updated} updated, {rebuilt} rebuilt, {failed} failed"
+    );
 }
 
 fn cron_thread(home: std::path::PathBuf, mut stop: tokio::sync::watch::Receiver<bool>) {

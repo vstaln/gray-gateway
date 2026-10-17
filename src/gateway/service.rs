@@ -47,11 +47,25 @@ fn proc_comm(pid: u32) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-fn find_in_path(cmd: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(cmd: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|d| d.join(cmd))
-        .find(|p| p.is_file())
+        .find(executable)
+}
+
+#[cfg(unix)]
+fn executable(p: &PathBuf) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    p.is_file()
+        && std::fs::metadata(p)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn executable(p: &PathBuf) -> bool {
+    p.is_file()
 }
 
 pub fn svdir() -> PathBuf {

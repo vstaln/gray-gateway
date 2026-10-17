@@ -160,8 +160,13 @@ impl SaveLocalDeliver {
                 }
 
                 let note = crate::cron_fire::mirror_message(&job.name, &excerpt);
-                if let Err(e) = crate::vendor::append_injected_user(&self.home, &origin.chat, &note)
-                {
+                let (home, chat) = (self.home.clone(), origin.chat.clone());
+                let appended = tokio::task::spawn_blocking(move || {
+                    crate::vendor::append_injected_user(&home, &chat, &note)
+                })
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("append task failed: {e}")));
+                if let Err(e) = appended {
                     log::warn!(
                         "cron {}: no session {:?} to mirror into ({e:#}); delivering anyway",
                         job.id,

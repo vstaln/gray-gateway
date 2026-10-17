@@ -50,12 +50,68 @@ pub fn auto_update_enabled() -> bool {
         .unwrap_or(true)
 }
 
+pub(crate) fn lock_file_at(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Option<std::fs::File>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match f.try_lock() {
+            Ok(()) => return Ok(Some(f)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    anyhow::bail!("timed out waiting for lock {}", path.display());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                log::warn!(
+                    "file locking unsupported on {} ({e}); proceeding unlocked",
+                    path.display()
+                );
+                return Ok(None);
+            }
+        }
+    }
+}
+
 pub fn set_flag(key: &str, on: bool) -> anyhow::Result<()> {
     let path = saved_config_path()?;
-    let mut v = saved_config_value(&path);
-    if !v.is_object() {
-        v = serde_json::json!({});
-    }
+    let _lock = lock_file_at(
+        &path.with_extension("lock"),
+        std::time::Duration::from_secs(5),
+    )?;
+    let body = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut v = if body.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "{} is not valid JSON ({e}); refusing to overwrite",
+                path.display()
+            )
+        })?;
+        if !v.is_object() {
+            anyhow::bail!(
+                "{} is not a JSON object; refusing to overwrite",
+                path.display()
+            );
+        }
+        v
+    };
     if on {
         v.as_object_mut().map(|o| o.remove(key));
     } else {
@@ -64,8 +120,26 @@ pub fn set_flag(key: &str, on: bool) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&v)?)?;
+    let tmp = path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!(".gray-{}.tmp", uuid::Uuid::new_v4()));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    std::io::Write::write_all(
+        &mut opts.open(&tmp)?,
+        serde_json::to_string_pretty(&v)?.as_bytes(),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
     std::fs::rename(&tmp, &path)?;
     Ok(())
 }
@@ -98,18 +172,51 @@ pub fn append_injected_user(home: &Path, sid: &str, text: &str) -> anyhow::Resul
     if !valid_session_id(sid) {
         anyhow::bail!("invalid session id {sid:?}");
     }
-    let path = home.join("sessions").join(format!("{sid}.jsonl"));
-    let content = std::fs::read_to_string(&path)?;
+    let dir = home.join("sessions");
+    let path = dir.join(format!("{sid}.jsonl"));
+    let _lock = lock_file_at(
+        &dir.join(format!("{sid}.lock")),
+        std::time::Duration::from_secs(30),
+    )?;
+    let mut content = std::fs::read_to_string(&path)?;
+    if !content.ends_with('\n')
+        && let Some(cut) = content.rfind('\n')
+    {
+        let f = std::fs::OpenOptions::new().write(true).open(&path)?;
+        f.set_len((cut + 1) as u64)?;
+        f.sync_all()?;
+        log::warn!(
+            "{}: truncated torn tail to last complete record",
+            path.display()
+        );
+        content.truncate(cut + 1);
+    }
+    let mut lines = content.lines().filter(|l| !l.trim().is_empty());
+    if lines.next().is_none() {
+        anyhow::bail!("session {sid:?} has no entries");
+    }
+    if !content.ends_with('\n') {
+        anyhow::bail!("session has an incomplete tail; repair before appending");
+    }
     let mut max_id: Option<u64> = None;
     let mut last_id: Option<u64> = None;
-    for line in content.lines().filter(|l| !l.trim().is_empty()) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+    let mut seen_first = false;
+    for (n, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
             continue;
-        };
-        if let Some(id) = v.get("entry_id").and_then(|x| x.as_u64()) {
-            max_id = Some(max_id.map_or(id, |m: u64| m.max(id)));
-            last_id = Some(id);
         }
+        if !seen_first {
+            seen_first = true;
+            continue;
+        }
+        let lineno = n + 1;
+        let v: serde_json::Value = serde_json::from_str(line)
+            .map_err(|e| anyhow::anyhow!("corrupt session entry at line {lineno}: {e}"))?;
+        let id = v.get("entry_id").and_then(|x| x.as_u64()).ok_or_else(|| {
+            anyhow::anyhow!("corrupt session entry at line {lineno}: missing entry_id")
+        })?;
+        max_id = Some(max_id.map_or(id, |m: u64| m.max(id)));
+        last_id = Some(id);
     }
     let entry = serde_json::json!({
         "entry_id": max_id.map_or(0, |m| m + 1),
@@ -139,6 +246,21 @@ pub fn gray_bin() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_file())
         .unwrap_or_else(|| PathBuf::from("gray"))
+}
+
+pub fn gray_bin_abs() -> anyhow::Result<PathBuf> {
+    if let Some(p) = std::env::var_os("GRAY_BIN").map(PathBuf::from) {
+        anyhow::ensure!(
+            p.is_file(),
+            "GRAY_BIN points at {} which does not exist",
+            p.display()
+        );
+        return Ok(std::fs::canonicalize(&p).unwrap_or(p));
+    }
+    let raw = crate::gateway::service::find_in_path("gray").ok_or_else(|| {
+        anyhow::anyhow!("cannot resolve the gray binary: set GRAY_BIN or put gray on PATH")
+    })?;
+    Ok(std::fs::canonicalize(&raw).unwrap_or(raw))
 }
 
 #[derive(Debug, Clone)]
