@@ -13,7 +13,7 @@ pub mod socket;
 pub mod state;
 pub mod turn;
 
-mod run;
+pub(crate) mod run;
 
 pub fn state_dir(home: &Path) -> std::path::PathBuf {
     home.join("gateway")

@@ -174,3 +174,7 @@ pub(crate) fn next_cron_in<Tz: TimeZone>(after: i64, expr: &str, tz: &Tz) -> Opt
     let after_dt = tz.timestamp_opt(after, 0).single()?;
     sched.after(&after_dt).next().map(|dt| dt.timestamp())
 }
+
+#[path = "schedule_tests.rs"]
+#[cfg(test)]
+mod tests;

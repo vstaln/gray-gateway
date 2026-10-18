@@ -9,7 +9,7 @@ fn fmt_ts(ts: i64) -> String {
         .unwrap_or_else(|| ts.to_string())
 }
 
-fn fmt_ts_opt(ts: Option<i64>) -> String {
+pub(crate) fn fmt_ts_opt(ts: Option<i64>) -> String {
     ts.map(fmt_ts).unwrap_or_else(|| "-".to_string())
 }
 

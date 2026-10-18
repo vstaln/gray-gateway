@@ -576,3 +576,7 @@ pub async fn serve_loop(
     }
     Ok(())
 }
+
+#[path = "cron_serve_tests.rs"]
+#[cfg(test)]
+mod tests;

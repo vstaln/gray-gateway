@@ -66,13 +66,8 @@ pub async fn run_foreground() -> anyhow::Result<()> {
         &state::record(state::STATE_RUNNING, None, started_at),
     );
 
-    let (cron_stop_tx, cron_stop_rx) = tokio::sync::watch::channel(false);
-    let cron_thread = {
-        let home = home.clone();
-        std::thread::Builder::new()
-            .name("gray-cron".into())
-            .spawn(move || cron_thread(home, cron_stop_rx))?
-    };
+    let (cron_stop_tx, cron_thread) =
+        spawn_ticker(home.clone(), Duration::from_secs(60), TICK_KIND)?;
 
     let gray_bin = crate::vendor::gray_bin();
     let runner = std::sync::Arc::new(crate::gateway::turn::ChildRunner {
@@ -293,7 +288,27 @@ async fn auto_update_pass(bare: bool, home: std::path::PathBuf) {
     );
 }
 
-fn cron_thread(home: std::path::PathBuf, mut stop: tokio::sync::watch::Receiver<bool>) {
+pub(crate) fn spawn_ticker(
+    home: std::path::PathBuf,
+    tick_every: Duration,
+    kind: &'static str,
+) -> std::io::Result<(
+    tokio::sync::watch::Sender<bool>,
+    std::thread::JoinHandle<()>,
+)> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let handle = std::thread::Builder::new()
+        .name("gray-cron".into())
+        .spawn(move || cron_thread(home, rx, tick_every, kind))?;
+    Ok((tx, handle))
+}
+
+pub(crate) fn cron_thread(
+    home: std::path::PathBuf,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    tick_every: Duration,
+    kind: &'static str,
+) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -318,14 +333,18 @@ fn cron_thread(home: std::path::PathBuf, mut stop: tokio::sync::watch::Receiver<
         };
         let deliver = crate::cron_serve::SaveLocalDeliver { home: home.clone() };
 
-        let first = tokio::time::Instant::now()
-            + Duration::from_secs(60 - (crate::cron::now_secs() as u64 % 60));
-        let mut interval = tokio::time::interval_at(first, Duration::from_secs(60));
+        let first = if tick_every >= Duration::from_secs(60) {
+            tokio::time::Instant::now()
+                + Duration::from_secs(60 - (crate::cron::now_secs() as u64 % 60))
+        } else {
+            tokio::time::Instant::now() + tick_every
+        };
+        let mut interval = tokio::time::interval_at(first, tick_every);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let tick = crate::cron_serve::tick_once(&store, &runner, &deliver, TICK_KIND);
+                    let tick = crate::cron_serve::tick_once(&store, &runner, &deliver, kind);
                     tokio::pin!(tick);
                     tokio::select! {
                         report = &mut tick => match report {

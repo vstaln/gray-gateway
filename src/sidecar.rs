@@ -7,6 +7,9 @@ pub fn manifest() -> Value {
         "protocol": "1.3",
         "tools": [crate::cron_tool::tool_def()],
         "commands": ["/cron"],
+        // spawned at session start so the cron ticker runs while a REPL is
+        // open — no `gray-gateway run` daemon needed for reminders/wakes
+        "autostart": true,
         "completion": [
             "setup", "run", "status", "start", "stop", "restart", "install",
             "uninstall", "on", "off", "lifecycle", "send", "wake", "activity",
@@ -51,42 +54,106 @@ fn command_run(params: &Value) -> Value {
                 Ok(s) => s,
                 Err(e) => return json!({"text": format!("cron store unavailable: {e:#}")}),
             };
-            let now = crate::cron::now_secs();
-            let health = store.health(now).ok();
-            let query = params
+            let argv: Vec<String> = params
                 .get("argv")
                 .and_then(Value::as_array)
                 .map(|a| {
                     a.iter()
                         .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                        .map(str::to_string)
+                        .collect()
                 })
                 .unwrap_or_default();
-            let query = query.trim();
-            let jobs = store.list().unwrap_or_default();
-            let text = if query.is_empty() {
-                crate::cron_status::format_cron_dashboard(&jobs, health.as_ref(), now)
-            } else {
-                match jobs
-                    .into_iter()
-                    .find(|j| j.id.starts_with(query) || j.name == query)
-                {
-                    Some(j) => {
-                        crate::cron_status::format_cron_dashboard(&[j], health.as_ref(), now)
-                    }
-                    None => format!("unknown cron job {query:?}"),
-                }
-            };
-            json!({"text": text})
+            json!({"text": cron_command(&store, &argv)})
         }
         _ => json!({"text": format!("unknown command {name:?}")}),
     }
 }
 
+fn cron_command(store: &crate::cron::CronStore, argv: &[String]) -> String {
+    let mut it = argv.iter().map(|s| s.as_str());
+    let verb = it.next().unwrap_or("list");
+    match verb {
+        "pause" | "resume" | "remove" => {
+            let Some(id) = it.next() else {
+                return format!("usage: /cron {verb} <job>");
+            };
+            let result = match verb {
+                "pause" => store
+                    .set_paused(id, true)
+                    .map(|known| known.then(|| format!("paused {id}"))),
+                "resume" => store.set_paused(id, false).map(|known| {
+                    known.then(|| {
+                        let next = store
+                            .get(id)
+                            .ok()
+                            .flatten()
+                            .map(|j| crate::cron_cli::fmt_ts_opt(j.next_run_at))
+                            .unwrap_or_else(|| "-".to_string());
+                        format!("resumed {id} next {next}")
+                    })
+                }),
+                _ => store
+                    .remove(id)
+                    .map(|known| known.then(|| format!("removed {id}"))),
+            };
+            match result {
+                Ok(Some(text)) => text,
+                Ok(None) => format!("unknown cron job {id:?}"),
+                Err(e) => format!("cron {verb} failed: {e:#}"),
+            }
+        }
+        "list" => cron_listing(store, it.next()),
+        query => cron_listing(store, Some(query)),
+    }
+}
+
+fn cron_listing(store: &crate::cron::CronStore, query: Option<&str>) -> String {
+    let now = crate::cron::now_secs();
+    let health = store.health(now).ok();
+    let jobs = store.list().unwrap_or_default();
+    match query {
+        None => crate::cron_status::format_cron_dashboard(&jobs, health.as_ref(), now),
+        Some(q) => match jobs
+            .into_iter()
+            .find(|j| j.id.starts_with(q) || j.name == q)
+        {
+            Some(j) => crate::cron_status::format_cron_dashboard(&[j], health.as_ref(), now),
+            None => format!("unknown cron job {q:?}"),
+        },
+    }
+}
+
 const MAX_LINE: usize = 1 << 20;
 
+/// The host spawns one sidecar per session and kills it on exit — a ticking
+/// sidecar means cron jobs fire whenever a REPL is open, no daemon needed.
+/// Concurrent tickers (the `gray-gateway run` daemon, other sessions) are
+/// fine: `claim_due` hands each due job to exactly one owner.
+struct CronTicker {
+    stop: tokio::sync::watch::Sender<bool>,
+}
+
+impl CronTicker {
+    fn start() -> Option<Self> {
+        let home = crate::vendor::gray_home()
+            .map_err(|e| log::warn!("gateway: no gray home, sidecar cron disabled: {e:#}"))
+            .ok()?;
+        crate::gateway::run::spawn_ticker(home, std::time::Duration::from_secs(60), "sidecar")
+            .map(|(stop, _handle)| Self { stop })
+            .map_err(|e| log::warn!("gateway: sidecar cron ticker failed to spawn: {e:#}"))
+            .ok()
+    }
+}
+
+impl Drop for CronTicker {
+    fn drop(&mut self) {
+        let _ = self.stop.send(true);
+    }
+}
+
 pub async fn run() -> anyhow::Result<()> {
+    let _cron_ticker = CronTicker::start();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let stdin = tokio::io::stdin();
     let mut reader = tokio::io::BufReader::new(stdin);
@@ -193,3 +260,7 @@ async fn dispatch(line: &str, out: &mut tokio::io::Stdout) -> anyhow::Result<boo
     }
     Ok(true)
 }
+
+#[path = "sidecar_tests.rs"]
+#[cfg(test)]
+mod tests;
