@@ -151,7 +151,7 @@ pub enum GatewayCmd {
     Setup {
         #[arg(
             value_name = "PLATFORM",
-            help = "Platform to set up; omit for the picker"
+            help = "Platform to set up; omit to choose from a numbered list"
         )]
         platform: Option<String>,
     },

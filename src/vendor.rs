@@ -400,7 +400,18 @@ pub fn resolve_skill_name(cwd: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-pub fn setup_apps(home: &Path) -> Vec<String> {
+/// A chat platform `gray gateway setup` can offer: an installed plugin the
+/// gateway hosts as a sidecar, with a `setup` verb to walk through.
+pub struct SetupApp {
+    pub name: String,
+    /// The plugin's CLI binary when one can be found. `setup` execs it
+    /// directly, so a platform still configures when `gray <name>`
+    /// forwarding can't — catalog sidecar installs have no `cli_argv`.
+    pub exe: Option<PathBuf>,
+}
+
+/// Installed plugins usable as gateway chat apps, sorted by name.
+pub fn setup_apps(home: &Path) -> Vec<SetupApp> {
     let Ok(raw) = std::fs::read_to_string(home.join("plugins/lock.json")) else {
         return Vec::new();
     };
@@ -410,26 +421,176 @@ pub fn setup_apps(home: &Path) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(plugins) = lock.get("plugins").and_then(|p| p.as_object()) {
         for (name, entry) in plugins {
-            if entry.get("cli_argv").is_none()
-                || entry.get("enabled") == Some(&serde_json::Value::Bool(false))
-            {
+            if name == "gateway" || entry.get("enabled") == Some(&serde_json::Value::Bool(false)) {
                 continue;
             }
-            let manifest = home.join("plugins").join(format!("{name}-manifest.json"));
-            let has_setup = std::fs::read_to_string(manifest)
-                .ok()
-                .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-                .and_then(|m| m["completion"].as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .any(|v| v.as_str() == Some("setup"));
-            if has_setup {
-                out.push(name.clone());
+            let dir = home.join("plugins").join(name);
+            let Some((manifest, exe)) = app_manifest(home, name, entry, &dir) else {
+                continue;
+            };
+            if is_setup_app(&manifest, entry, &dir) {
+                out.push(SetupApp {
+                    name: name.clone(),
+                    exe,
+                });
             }
         }
     }
-    out.sort();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// The plugin's manifest plus its CLI binary: the cached
+/// `<name>-manifest.json` when present, else a `manifest` probe of the
+/// plugin's executables (a catalog sidecar install never wrote the cache).
+fn app_manifest(
+    home: &Path,
+    name: &str,
+    entry: &serde_json::Value,
+    dir: &Path,
+) -> Option<(serde_json::Value, Option<PathBuf>)> {
+    let cached = home.join("plugins").join(format!("{name}-manifest.json"));
+    if let Some(m) = std::fs::read_to_string(&cached)
+        .ok()
+        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+    {
+        return Some((m, exe_candidates(name, entry, dir).into_iter().next()));
+    }
+    for cand in exe_candidates(name, entry, dir) {
+        if let Some(m) = probe_manifest(&cand, name) {
+            return Some((m, Some(cand)));
+        }
+    }
+    None
+}
+
+/// Does the manifest describe a gateway chat app — a sidecar plugin with a
+/// `setup` verb? The gateway itself has no sidecar shape, so this never
+/// lists it as its own platform.
+fn is_setup_app(manifest: &serde_json::Value, entry: &serde_json::Value, dir: &Path) -> bool {
+    let has_setup = ["completion", "subcommands"].iter().any(|key| {
+        manifest[*key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|v| v.as_str() == Some("setup"))
+    });
+    let sidecar = manifest["sidecar_args"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty())
+        || entry["argv"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|v| v.as_str() == Some("sidecar"))
+        || dir.join("plugin.sh").is_file();
+    has_setup && sidecar
+}
+
+/// Executables that might carry this plugin's CLI, best first: the
+/// registered argvs, then `gray-<name>`-style binaries in the plugin dir
+/// (one level of per-target subdirs covered). `plugin.sh` is skipped — it
+/// launches the sidecar, never a `manifest` reply.
+fn exe_candidates(name: &str, entry: &serde_json::Value, dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for key in ["cli_argv", "argv"] {
+        if let Some(p) = entry[key]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .filter(|p| !p.is_empty())
+        {
+            let path = PathBuf::from(p);
+            if path.is_file() && !out.contains(&path) {
+                out.push(path);
+            }
+        }
+    }
+    let mut named = Vec::new();
+    let mut rest = Vec::new();
+    let mut scan = |d: &Path| {
+        let Ok(rd) = std::fs::read_dir(d) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Ok(sub) = std::fs::read_dir(&p) {
+                    for se in sub.flatten() {
+                        let sp = se.path();
+                        if sp.is_file()
+                            && is_exec(&sp)
+                            && sp.file_name() != Some("plugin.sh".as_ref())
+                        {
+                            rest.push(sp);
+                        }
+                    }
+                }
+            } else if is_exec(&p) && p.file_name() != Some("plugin.sh".as_ref()) {
+                let stem = p.file_stem().and_then(|s| s.to_str());
+                if stem == Some(format!("gray-{name}").as_str()) || stem == Some(name) {
+                    named.push(p);
+                } else {
+                    rest.push(p);
+                }
+            }
+        }
+    };
+    scan(dir);
+    named.sort();
+    rest.sort();
+    out.extend(named);
+    out.extend(rest);
+    out
+}
+
+#[cfg(unix)]
+fn is_exec(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    p.is_file()
+        && std::fs::metadata(p)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_exec(p: &Path) -> bool {
+    p.is_file()
+}
+
+/// Run `<exe> manifest` and keep the reply when it parses and names this
+/// plugin. Bounded so a wedged binary can't hang setup.
+fn probe_manifest(exe: &Path, name: &str) -> Option<serde_json::Value> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = std::process::Command::new(exe)
+        .arg("manifest")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut out = Vec::new();
+    child.stdout.take()?.read_to_end(&mut out).ok()?;
+    let m: serde_json::Value = serde_json::from_slice(&out).ok()?;
+    (m["name"].as_str() == Some(name)).then_some(m)
 }
 
 pub fn gray_cli(args: &[&str]) -> anyhow::Result<std::process::Output> {
