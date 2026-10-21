@@ -355,7 +355,7 @@ pub async fn run_cli(cmd: crate::GatewayCmd) -> anyhow::Result<()> {
             println!("{}", service::uninstall()?);
             Ok(())
         }
-        GatewayCmd::Cron(_) => unreachable!("handled by main"),
+        GatewayCmd::Cron(_) | GatewayCmd::Session(_) => unreachable!("handled by main"),
         GatewayCmd::Lifecycle(_) | GatewayCmd::Setup { .. } | GatewayCmd::Agent(_) => {
             unreachable!("handled above")
         }

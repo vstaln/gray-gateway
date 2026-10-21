@@ -6,6 +6,7 @@ mod cron_status;
 mod cron_tool;
 mod gateway;
 mod redact;
+mod session;
 mod sidecar;
 mod vendor;
 
@@ -200,6 +201,12 @@ pub enum GatewayCmd {
 
     #[command(subcommand, about = "Manage scheduled jobs (what `gray cron` runs)")]
     Cron(CronCmd),
+
+    #[command(
+        subcommand,
+        about = "Send into or read gray sessions (what `gray send` / `gray read` run)"
+    )]
+    Session(session::SessionCmd),
 }
 
 #[derive(Parser, Debug)]
@@ -240,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
     match cli.cmd {
         GatewayCmd::Cron(cmd) => cron_cli::run_cron(cmd).await,
+        GatewayCmd::Session(cmd) => session::run(cmd).await,
         cmd => gateway::run_cli(cmd).await,
     }
 }

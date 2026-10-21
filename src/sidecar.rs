@@ -13,7 +13,7 @@ pub fn manifest() -> Value {
         "completion": [
             "setup", "run", "status", "start", "stop", "restart", "install",
             "uninstall", "on", "off", "lifecycle", "send", "wake", "activity",
-            "pause", "resume", "inbox", "cron",
+            "pause", "resume", "inbox", "cron", "session",
         ],
     })
 }
