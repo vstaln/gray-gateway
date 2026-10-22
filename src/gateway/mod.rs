@@ -281,7 +281,7 @@ impl Drop for TermRaw {
     }
 }
 
-fn toggle(on: bool) -> String {
+pub(crate) fn toggle(on: bool) -> String {
     match crate::vendor::set_flag("gw_auto", on) {
         Ok(()) if on => "✓ gateway on".to_string(),
         Ok(()) => {
@@ -380,7 +380,7 @@ fn lifecycle_cli(cmd: crate::LifecycleCmd) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn report(home: &Path) -> (bool, Vec<String>) {
+pub(crate) fn report(home: &Path) -> (bool, Vec<String>) {
     let now = crate::cron::now_secs();
     let sup = service::detect();
     let mut lines = Vec::new();
