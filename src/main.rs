@@ -6,6 +6,7 @@ mod cron_status;
 mod cron_tool;
 mod gateway;
 mod redact;
+mod session;
 mod sidecar;
 mod vendor;
 
@@ -14,7 +15,10 @@ use clap::Parser;
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum CronCmd {
     #[command(about = "List cron jobs")]
-    List,
+    List {
+        #[arg(long, help = "Emit machine-readable JSON for plugin consumers")]
+        json: bool,
+    },
 
     #[command(
         about = "Add a scheduled job",
@@ -151,7 +155,7 @@ pub enum GatewayCmd {
     Setup {
         #[arg(
             value_name = "PLATFORM",
-            help = "Platform to set up; omit for the picker"
+            help = "Platform to set up; omit to choose from a numbered list"
         )]
         platform: Option<String>,
     },
@@ -200,6 +204,12 @@ pub enum GatewayCmd {
 
     #[command(subcommand, about = "Manage scheduled jobs (what `gray cron` runs)")]
     Cron(CronCmd),
+
+    #[command(
+        subcommand,
+        about = "Send into or read gray sessions (what `gray send` / `gray read` run)"
+    )]
+    Session(session::SessionCmd),
 }
 
 #[derive(Parser, Debug)]
@@ -240,6 +250,7 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
     match cli.cmd {
         GatewayCmd::Cron(cmd) => cron_cli::run_cron(cmd).await,
+        GatewayCmd::Session(cmd) => session::run(cmd).await,
         cmd => gateway::run_cli(cmd).await,
     }
 }

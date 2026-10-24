@@ -31,14 +31,14 @@ pub struct TickStamp {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OverdueJob {
     pub id: String,
     pub name: String,
     pub next_run_at: i64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct CronHealth {
     pub last_tick: Option<TickStamp>,
     pub overdue: Vec<OverdueJob>,

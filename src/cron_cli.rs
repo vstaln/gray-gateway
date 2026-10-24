@@ -121,8 +121,12 @@ pub async fn run_cron(cmd: crate::CronCmd) -> anyhow::Result<()> {
         );
     }
     match cmd {
-        CronCmd::List => {
+        CronCmd::List { json } => {
             let store = cron_store()?;
+            if json {
+                println!("{}", list_json(&store)?);
+                return Ok(());
+            }
             let jobs = store.list()?;
             if jobs.is_empty() {
                 println!("no cron jobs");
@@ -381,3 +385,18 @@ pub async fn run_cron(cmd: crate::CronCmd) -> anyhow::Result<()> {
         }
     }
 }
+
+/// The `list --json` payload: every job plus ticker health, for in-process
+/// consumers that must not read the store themselves (e.g. `gray /jobs`).
+fn list_json(store: &crate::cron::CronStore) -> anyhow::Result<String> {
+    let now = crate::cron::now_secs();
+    Ok(serde_json::json!({
+        "jobs": store.list()?,
+        "health": store.health(now).ok(),
+    })
+    .to_string())
+}
+
+#[path = "cron_cli_tests.rs"]
+#[cfg(test)]
+mod tests;

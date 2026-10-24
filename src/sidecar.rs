@@ -6,14 +6,15 @@ pub fn manifest() -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "protocol": "1.3",
         "tools": [crate::cron_tool::tool_def()],
-        "commands": ["/cron"],
+        "commands": ["/cron", "/gateway"],
+        "turn_local": {"/gateway": ["*"], "/cron": ["*"]},
         // spawned at session start so the cron ticker runs while a REPL is
         // open — no `gray-gateway run` daemon needed for reminders/wakes
         "autostart": true,
         "completion": [
             "setup", "run", "status", "start", "stop", "restart", "install",
             "uninstall", "on", "off", "lifecycle", "send", "wake", "activity",
-            "pause", "resume", "inbox", "cron",
+            "pause", "resume", "inbox", "cron", "session",
         ],
     })
 }
@@ -66,7 +67,41 @@ fn command_run(params: &Value) -> Value {
                 .unwrap_or_default();
             json!({"text": cron_command(&store, &argv)})
         }
+        "gateway" => {
+            let argv: Vec<String> = params
+                .get("argv")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            gateway_command(&argv)
+        }
         _ => json!({"text": format!("unknown command {name:?}")}),
+    }
+}
+
+/// `/gateway on|off` flips the master switch (`gw_auto` in config.json —
+/// the same flag `gray gateway on` writes); bare/status renders the
+/// supervisor report the CLI prints for `gray gateway status`.
+fn gateway_command(argv: &[String]) -> Value {
+    match argv.first().map(String::as_str) {
+        Some("on") => json!({"text": crate::gateway::toggle(true)}),
+        Some("off") => json!({"text": crate::gateway::toggle(false)}),
+        _ => match crate::vendor::gray_home() {
+            Ok(home) => {
+                let (_, lines) = crate::gateway::report(&home);
+                let mut text = lines.join("\n");
+                if !crate::vendor::gw_auto_enabled() {
+                    text.push_str("\n(master switch off — /gateway on to enable)");
+                }
+                json!({"text": text})
+            }
+            Err(e) => json!({"text": format!("{e:#}")}),
+        },
     }
 }
 
