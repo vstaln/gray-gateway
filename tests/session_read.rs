@@ -15,10 +15,7 @@ fn run(args: &[&str], home: &Path) -> Output {
 
 fn write_session(sessions: &Path, id: &str) {
     let body = format!(
-        "{}\n{}\n{}\n{}\n",
-        format!(
-            "{{\"version\":1,\"id\":\"{id}\",\"timestamp\":1791932042949,\"cwd\":\"/tmp/work\",\"model\":\"swe-2\"}}"
-        ),
+        "{{\"version\":1,\"id\":\"{id}\",\"timestamp\":1791932042949,\"cwd\":\"/tmp/work\",\"model\":\"swe-2\"}}\n{}\n{}\n{}\n",
         "{\"entry_id\":0,\"parent_id\":null,\"timestamp\":1791932043564,\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello from test\"}]}}",
         "{\"entry_id\":1,\"parent_id\":0,\"timestamp\":1791932044000,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"bash\",\"args\":{\"command\":\"cargo test --release --test session\"}},{\"type\":\"tool_result\",\"id\":\"t1\",\"content\":\"ok 12 passed\",\"is_error\":false}]}}",
         "{\"entry_id\":2,\"parent_id\":1,\"timestamp\":1791932045000,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done fixing\"}]}}",

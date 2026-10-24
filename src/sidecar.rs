@@ -71,7 +71,12 @@ fn command_run(params: &Value) -> Value {
             let argv: Vec<String> = params
                 .get("argv")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default();
             gateway_command(&argv)
         }
