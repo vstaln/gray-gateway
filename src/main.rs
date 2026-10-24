@@ -15,7 +15,10 @@ use clap::Parser;
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum CronCmd {
     #[command(about = "List cron jobs")]
-    List,
+    List {
+        #[arg(long, help = "Emit machine-readable JSON for plugin consumers")]
+        json: bool,
+    },
 
     #[command(
         about = "Add a scheduled job",
