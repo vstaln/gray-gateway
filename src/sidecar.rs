@@ -11,6 +11,7 @@ pub fn manifest() -> Value {
         // spawned at session start so the cron ticker runs while a REPL is
         // open — no `gray-gateway run` daemon needed for reminders/wakes
         "autostart": true,
+        "requires_plugins": ["memory"],
         "completion": [
             "setup", "run", "status", "start", "stop", "restart", "install",
             "uninstall", "on", "off", "lifecycle", "send", "wake", "activity",
