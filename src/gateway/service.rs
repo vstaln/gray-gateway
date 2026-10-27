@@ -281,10 +281,56 @@ pub fn start() -> anyhow::Result<String> {
             }
             Ok(settle_line(format!("started {SERVICE_NAME}"), &home))
         }
-        Supervisor::None => anyhow::bail!(
-            "no supervisor detected — run `gray gateway run` under your own daemon manager"
-        ),
+        Supervisor::None => restart_unsupervised(&home),
     }
+}
+
+fn restart_unsupervised(home: &Path) -> anyhow::Result<String> {
+    use std::process::Stdio;
+    let Some(rec) = super::pid::running(home) else {
+        anyhow::bail!("gateway is not running — `gray gateway run` to start it");
+    };
+    stop_by_pid(home)?;
+    let exe = crate::vendor::gray_bin_abs()?;
+    let log = home.join("logs").join("gateway.log");
+    std::fs::create_dir_all(home.join("logs"))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["gateway", "run"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(file.try_clone()?))
+        .stderr(Stdio::from(file));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    cmd.spawn().map_err(|e| {
+        anyhow::anyhow!(
+            "stopped the gateway (pid {}) but could not start it again: {e} — `gray gateway run` when you are back",
+            rec.pid
+        )
+    })?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if let Some(now) = super::pid::running(home) {
+            return Ok(format!(
+                "gateway restarted (pid {} was {}, log: {})",
+                now.pid,
+                rec.pid,
+                log.display()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Ok(format!(
+        "gateway stopped (pid {}) and relaunched; it has not reported in yet — log: {}",
+        rec.pid,
+        log.display()
+    ))
 }
 
 pub fn stop() -> anyhow::Result<String> {
