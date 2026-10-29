@@ -1,3 +1,4 @@
+pub mod chat_route;
 pub mod schedule;
 pub mod store;
 
