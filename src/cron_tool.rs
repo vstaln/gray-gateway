@@ -55,7 +55,9 @@ impl ScheduleTool {
                 anyhow::ensure!(store.set_paused(name, w == "off")?, "no job named {name:?}");
                 format!("{name} {}", if w == "off" { "paused" } else { "resumed" })
             }
-            (Some(name), Some(when)) => upsert(&store, sid, name, when, s("prompt"), args)?,
+            (Some(name), Some(when)) => {
+                upsert(&store, &self.home, sid, name, when, s("prompt"), args)?
+            }
         };
         let jobs = store.list()?;
         let list = if jobs.is_empty() {
@@ -73,6 +75,7 @@ impl ScheduleTool {
 
 fn upsert(
     store: &CronStore,
+    home: &std::path::Path,
     sid: Option<&str>,
     name: &str,
     when: &str,
@@ -108,11 +111,15 @@ fn upsert(
     } else {
         let prompt =
             prompt.ok_or_else(|| anyhow::anyhow!("`prompt` is required to create {name:?}"))?;
-        let origin = sid.map(|sid| Origin {
-            platform: crate::cron_serve::SESSION_PLATFORM.to_string(),
-            chat: sid.to_string(),
-            thread: None,
-            route: None,
+        // Inside a chat-hosted home the job belongs to the chat; the REPL
+        // session that created it is one turn long and nobody reads its inbox.
+        let origin = crate::cron::chat_route::current(home).or_else(|| {
+            sid.map(|sid| Origin {
+                platform: crate::cron_serve::SESSION_PLATFORM.to_string(),
+                chat: sid.to_string(),
+                thread: None,
+                route: None,
+            })
         });
         let deliver = if origin.is_some() {
             Deliver::Origin

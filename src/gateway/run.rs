@@ -348,7 +348,10 @@ pub(crate) fn cron_thread(
                     tokio::pin!(tick);
                     tokio::select! {
                         report = &mut tick => match report {
-                            Ok(rep) => log::info!("gateway: cron tick fired={} errors={}", rep.fired, rep.errors),
+                            Ok(rep) => {
+                                log::info!("gateway: cron tick fired={} errors={}", rep.fired, rep.errors);
+                                forward_cron_outbox(&home);
+                            }
                             Err(e) => log::warn!("gateway: cron tick failed: {e:#}"),
                         },
                         _ = stop.changed() => {
@@ -403,5 +406,85 @@ async fn drain<F: std::future::Future<Output = anyhow::Result<crate::cron_serve:
         Err(_) => log::warn!(
             "gateway: drain window elapsed; abandoning the fire (its claim expires within 300s)"
         ),
+    }
+}
+
+/// Chat-bound cron fires land in `$GRAY_HOME/cron/outbox`, the contract a
+/// `gray cron tick --json` host drains. The daemon is its own host, and
+/// platform plugins pull from the gateway outbox instead, so without this
+/// hop a scheduled job meant for Discord/Telegram/... was fired, marked ok,
+/// and never posted. Each entry becomes a trigger intent on its route.
+pub(crate) fn forward_cron_outbox(home: &std::path::Path) -> usize {
+    let dir = crate::gateway::state_dir(home);
+    let mut forwarded = 0;
+    for line in crate::cron_serve::drain_outbox(home) {
+        let Some(intent) = cron_intent(&line) else {
+            log::warn!("gateway: cron delivery without a chat route dropped");
+            continue;
+        };
+        match crate::gateway::outbox::enqueue(&dir, &intent) {
+            Ok(()) => forwarded += 1,
+            Err(e) => log::warn!("gateway: cannot queue cron delivery {}: {e:#}", intent.key),
+        }
+    }
+    forwarded
+}
+
+fn cron_intent(line: &str) -> Option<crate::gateway::outbox::Intent> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+    };
+    let route = crate::cron::store::Origin {
+        platform: field("platform")?,
+        chat: field("chat")?,
+        thread: field("thread"),
+        route: field("route"),
+    };
+    let key = format!("cron:{}", field("job_id").unwrap_or_default());
+    let text = field("text").or_else(|| field("final_text"))?;
+    Some(crate::gateway::outbox::Intent::new(
+        &key,
+        crate::gateway::event::Kind::Trigger,
+        Some(route),
+        &text,
+    ))
+}
+
+#[cfg(test)]
+mod cron_forward_tests {
+    use super::*;
+
+    #[test]
+    fn hosted_cron_delivery_reaches_the_gateway_outbox() {
+        let home = tempfile::tempdir().unwrap();
+        let line = serde_json::json!({
+            "type": "cron_delivery", "job_id": "abc", "name": "morning",
+            "platform": "discord", "chat": "11", "thread": null, "route": "11",
+            "kind": "reminder", "status": "ok", "final_text": "wake up",
+            "text": "wake up", "path": "/x",
+        });
+        let outbox = home.path().join("cron").join("outbox");
+        std::fs::create_dir_all(&outbox).unwrap();
+        std::fs::write(outbox.join("0001.json"), line.to_string()).unwrap();
+
+        assert_eq!(forward_cron_outbox(home.path()), 1);
+        assert!(crate::cron_serve::drain_outbox(home.path()).is_empty());
+        let dir = crate::gateway::state_dir(home.path());
+        let pulled = crate::gateway::outbox::pull(&dir, "discord", crate::cron::now_secs(), 10);
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].text, "wake up");
+        assert_eq!(pulled[0].route.as_ref().unwrap().chat, "11");
+        assert_eq!(pulled[0].key, "cron:abc");
+    }
+
+    #[test]
+    fn routeless_lines_are_dropped_not_queued() {
+        assert!(cron_intent(r#"{"platform":"","chat":"","text":"x"}"#).is_none());
+        assert!(cron_intent("not json").is_none());
     }
 }
