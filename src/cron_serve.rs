@@ -153,6 +153,13 @@ impl SaveLocalDeliver {
                     return Ok(saved(false));
                 };
 
+                // A job made by the schedule tool inside a chat-hosted home
+                // before it knew about chats is bound to a one-turn REPL
+                // session; send it to the home's chat instead.
+                let rerouted = (origin.platform == SESSION_PLATFORM)
+                    .then(|| crate::cron::chat_route::from_home(&self.home))
+                    .flatten();
+                let origin = rerouted.as_ref().unwrap_or(origin);
                 if origin.platform == SESSION_PLATFORM {
                     post_to_session_inbox(&self.home, &origin.chat, &saved(true))
                         .map_err(|e| format!("session inbox write failed: {e:#}"))?;

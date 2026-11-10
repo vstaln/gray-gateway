@@ -759,3 +759,57 @@ async fn hosted_delivery_survives_a_non_host_driver() {
     assert_eq!(v["final_text"], "time to stretch");
     assert!(drain_outbox(home.path()).is_empty(), "drained exactly once");
 }
+
+#[tokio::test]
+async fn repl_bound_job_in_a_chat_home_goes_to_the_chat() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("route.json"),
+        r#"{"platform":"discord","chat":"c1","route":"chan-7"}"#,
+    )
+    .unwrap();
+    let mut jobs = one_due("m1", serde_json::json!("origin"));
+    jobs[0]["origin"] = serde_json::json!({"platform": "repl", "chat": "one-turn-session"});
+    let store = due_store(&home, jobs);
+    let runner = StubRunner {
+        text: "good morning".to_string(),
+        fail: false,
+        seen: Default::default(),
+    };
+    let deliver = SaveLocalDeliver {
+        home: home.path().to_path_buf(),
+    };
+    let rep = tick_once_with(&store, &runner, &deliver, "gateway", true)
+        .await
+        .unwrap();
+    assert_eq!(rep.fired, 1);
+    let lines = drain_outbox(home.path());
+    assert_eq!(lines.len(), 1, "rerouted to the chat: {lines:?}");
+    let v: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(v["platform"], "discord");
+    assert_eq!(v["route"], "chan-7");
+    assert_eq!(v["final_text"], "good morning");
+}
+
+#[test]
+fn schedule_tool_binds_jobs_to_the_chat_home() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("route.json"),
+        r#"{"platform":"discord","chat":"c1","route":"chan-7"}"#,
+    )
+    .unwrap();
+    let tool = crate::cron_tool::ScheduleTool {
+        home: home.path().to_path_buf(),
+    };
+    tool.apply(
+        Some("sid-1"),
+        &serde_json::json!({"name": "wake", "when": "daily 8am", "prompt": "hi"}),
+    )
+    .unwrap();
+    let store = crate::cron::CronStore::open(home.path().join("cron")).unwrap();
+    let job = store.get("wake").unwrap().unwrap();
+    let origin = job.origin.unwrap();
+    assert_eq!(origin.platform, "discord");
+    assert_eq!(origin.route.as_deref(), Some("chan-7"));
+}
