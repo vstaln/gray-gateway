@@ -44,12 +44,6 @@ pub fn gw_auto_enabled() -> bool {
         .unwrap_or(true)
 }
 
-pub fn auto_update_enabled() -> bool {
-    saved_config_path()
-        .map(|p| flag_at(&p, "auto_update"))
-        .unwrap_or(true)
-}
-
 pub(crate) fn lock_file_at(
     path: &Path,
     timeout: std::time::Duration,
