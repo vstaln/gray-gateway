@@ -201,7 +201,7 @@ pub async fn run_cron(cmd: crate::CronCmd) -> anyhow::Result<()> {
                             platform: env_origin
                                 .as_ref()
                                 .map(|o| o.platform.clone())
-                                .unwrap_or_else(|| "local".to_string()),
+                                .unwrap_or_else(|| crate::cron_serve::SESSION_PLATFORM.to_string()),
                             chat: chat.trim().to_string(),
                             thread: None,
                             route: env_origin.as_ref().and_then(|o| o.route.clone()),
