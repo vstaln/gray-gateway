@@ -473,19 +473,28 @@ impl CronStore {
         with_jobs_lock(&self.lock_path(), || {
             let mut raw = self.load_raw()?;
             let before = raw.len();
+            let mut gone = Vec::new();
             raw.retain(|x| {
-                let id_match = x.get("id").and_then(|i| i.as_str()) == Some(id_or_name);
+                let id = x.get("id").and_then(|i| i.as_str());
+                let id_match = id == Some(id_or_name);
                 let name_match = x.get("name").and_then(|n| n.as_str()) == Some(id_or_name);
+                if id_match || name_match {
+                    gone.extend(id.map(str::to_string));
+                }
                 !(id_match || name_match)
             });
             if raw.len() == before {
                 return Ok(false);
             }
             atomic_write_json(&self.jobs_path(), &raw)?;
+            for id in gone {
+                crate::cron_digest::remove(&self.cron_dir, &id);
+            }
             Ok(true)
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn claim_due_limited(
         &self,
         now: i64,
@@ -493,11 +502,41 @@ impl CronStore {
         limit: usize,
         exclude: &[String],
     ) -> anyhow::Result<Vec<CronJob>> {
+        self.claim_due_window(now, owner, limit, exclude, 0)
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.cron_dir
+    }
+
+    pub(crate) fn claim_due_window(
+        &self,
+        now: i64,
+        owner: &str,
+        limit: usize,
+        exclude: &[String],
+        window: i64,
+    ) -> anyhow::Result<Vec<CronJob>> {
         with_jobs_lock(&self.lock_path(), || {
             let mut raw = self.load_raw()?;
             let mut jobs = Self::parse_jobs(&raw);
             let mut due = Vec::new();
             let mut dirty = false;
+            let any_due = jobs.iter().any(|j| {
+                j.enabled
+                    && j.state == JobState::Active
+                    && !exclude.contains(&j.id)
+                    && j.fire_claim
+                        .as_ref()
+                        .is_none_or(|c| now.saturating_sub(c.at) > FIRE_CLAIM_TTL_SECS)
+                    && j.next_run_at.is_some_and(|n| n <= now)
+                    && !(matches!(j.schedule, Schedule::Once { .. }) && j.last_run_at.is_some())
+            });
+            let horizon = if any_due {
+                now.saturating_add(window.max(0))
+            } else {
+                now
+            };
             for job in jobs.iter_mut() {
                 if due.len() >= limit || exclude.contains(&job.id) {
                     continue;
@@ -539,7 +578,8 @@ impl CronStore {
                         }
                     },
                 };
-                if next > now {
+                let early_ok = !job.reminder && !matches!(job.schedule, Schedule::Once { .. });
+                if next > now && (!early_ok || next > horizon) {
                     continue;
                 }
                 if matches!(job.schedule, Schedule::Once { .. }) {
@@ -551,7 +591,7 @@ impl CronStore {
                         continue;
                     }
                 } else {
-                    match next_run(now, &job.schedule) {
+                    match next_run(now.max(next), &job.schedule) {
                         Some(advanced) => {
                             job.next_run_at = Some(advanced);
                         }

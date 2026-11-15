@@ -1,5 +1,6 @@
 mod cron;
 mod cron_cli;
+mod cron_digest;
 mod cron_fire;
 mod cron_serve;
 mod cron_status;
