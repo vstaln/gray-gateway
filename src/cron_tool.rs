@@ -59,17 +59,25 @@ impl ScheduleTool {
                 upsert(&store, &self.home, sid, name, when, s("prompt"), args)?
             }
         };
+        if !note.is_empty() {
+            return Ok(note);
+        }
         let jobs = store.list()?;
-        let list = if jobs.is_empty() {
+        let done = jobs.iter().filter(|j| j.state == JobState::Done).count();
+        let live: Vec<String> = jobs
+            .iter()
+            .filter(|j| j.state != JobState::Done)
+            .map(job_line)
+            .collect();
+        let mut out = if live.is_empty() {
             "no jobs".to_string()
         } else {
-            jobs.iter().map(job_line).collect::<Vec<_>>().join("\n")
+            live.join("\n")
         };
-        Ok(if note.is_empty() {
-            list
-        } else {
-            format!("{note}\n\n{list}")
-        })
+        if done > 0 {
+            out.push_str(&format!("\n({done} finished hidden)"));
+        }
+        Ok(out)
     }
 }
 
