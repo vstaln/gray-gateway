@@ -194,6 +194,27 @@ pub fn owner_stamp() -> String {
     format!("{}:{}", std::process::id(), uuid::Uuid::new_v4())
 }
 
+pub enum Prepared {
+    Done(crate::cron::RunStatus, Option<DeliveredFire>),
+    Run(ReadyFire),
+}
+
+pub struct ReadyFire {
+    pub job: crate::cron::CronJob,
+    pub prompt: String,
+    pub workdir: PathBuf,
+    pub input: Option<String>,
+}
+
+fn mark_failed(store: &crate::cron::CronStore, job: &crate::cron::CronJob, msg: &str) {
+    let _ = store.mark_done(
+        &job.id,
+        job.fire_claim.as_ref(),
+        crate::cron::RunStatus::Error,
+        Some(msg),
+    );
+}
+
 pub async fn fire_one(
     store: &crate::cron::CronStore,
     runner: &dyn AsyncRunner,
@@ -201,15 +222,33 @@ pub async fn fire_one(
     now: i64,
     deliver: &SaveLocalDeliver,
 ) -> (crate::cron::RunStatus, Option<DeliveredFire>) {
+    match prepare(store, job, now, deliver).await {
+        Prepared::Done(status, saved) => (status, saved),
+        Prepared::Run(ready) => {
+            let started = std::time::Instant::now();
+            let out = run_guarded(
+                runner,
+                ready.prompt.clone(),
+                ready.workdir.clone(),
+                FIRE_TIMEOUT_SECS,
+            )
+            .await;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            finish(store, deliver, ready, now, out, elapsed_ms).await
+        }
+    }
+}
+
+pub async fn prepare(
+    store: &crate::cron::CronStore,
+    job: crate::cron::CronJob,
+    now: i64,
+    deliver: &SaveLocalDeliver,
+) -> Prepared {
     use crate::cron::RunStatus;
     let fail = |msg: String| {
-        let _ = store.mark_done(
-            &job.id,
-            job.fire_claim.as_ref(),
-            RunStatus::Error,
-            Some(&msg),
-        );
-        RunStatus::Error
+        mark_failed(store, &job, &msg);
+        Prepared::Done(RunStatus::Error, None)
     };
     if job.reminder {
         let out = FireOutput {
@@ -219,7 +258,7 @@ pub async fn fire_one(
         return match deliver.deliver_full(&job, now, &out, 0).await {
             Ok(saved) => {
                 let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
-                (RunStatus::Ok, Some(saved))
+                Prepared::Done(RunStatus::Ok, Some(saved))
             }
             Err(msg) => {
                 let _ = store.mark_done(
@@ -228,7 +267,7 @@ pub async fn fire_one(
                     RunStatus::DeliveryFailed,
                     Some(&msg),
                 );
-                (RunStatus::DeliveryFailed, None)
+                Prepared::Done(RunStatus::DeliveryFailed, None)
             }
         };
     }
@@ -236,80 +275,140 @@ pub async fn fire_one(
         Some(w) => w.clone(),
         None => match std::env::current_dir() {
             Ok(c) => c,
-            Err(e) => return (fail(format!("cannot resolve workdir: {e:#}")), None),
+            Err(e) => return fail(format!("cannot resolve workdir: {e:#}")),
         },
     };
     if let Some(s) = &job.script
         && (!s.is_absolute() || !s.is_file())
     {
-        return (fail(format!("pre-script missing: {}", s.display())), None);
+        return fail(format!("pre-script missing: {}", s.display()));
     }
     let mut skill_paths = Vec::new();
     for name in &job.skills {
         match crate::vendor::resolve_skill_name(&workdir, name) {
             Some(p) => skill_paths.push(p),
-            None => return (fail(format!("skill not found: {name}")), None),
+            None => return fail(format!("skill not found: {name}")),
         }
     }
     let mut script_stdout: Option<String> = None;
+    let mut input = None;
     if let Some(s) = &job.script {
         let outcome = crate::cron_fire::run_pre_script(s, &workdir).await;
         if !outcome.ok {
-            return (
-                fail(format!("pre-script failed: {}", outcome.stderr_tail)),
-                None,
-            );
+            return fail(format!("pre-script failed: {}", outcome.stderr_tail));
         }
         if !crate::cron_fire::parse_wake_gate(&outcome.stdout) {
             let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
-            return (RunStatus::Ok, None);
+            return Prepared::Done(RunStatus::Ok, None);
         }
+        let digest =
+            crate::cron_digest::digest(&[&job.prompt, &job.skills.join("\n"), &outcome.stdout]);
+        let history = crate::cron_digest::load(store.dir(), &job.id);
+        if history.input_unchanged(&digest) {
+            let output = history.last().and_then(|r| r.output.clone());
+            crate::cron_digest::record(
+                store.dir(),
+                &job.id,
+                crate::cron_digest::Run {
+                    at: now,
+                    status: "skipped".to_string(),
+                    input: Some(digest),
+                    output,
+                },
+            );
+            let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
+            return Prepared::Done(RunStatus::Ok, None);
+        }
+        input = Some(digest);
         script_stdout = Some(outcome.stdout);
     }
     let prompt =
         crate::cron_fire::assemble_fire_prompt(&job.prompt, &skill_paths, script_stdout.as_deref());
-    let started = std::time::Instant::now();
+    Prepared::Run(ReadyFire {
+        job,
+        prompt,
+        workdir,
+        input,
+    })
+}
+
+pub async fn run_guarded(
+    runner: &dyn AsyncRunner,
+    prompt: String,
+    workdir: PathBuf,
+    secs: u64,
+) -> Result<FireOutput, String> {
     let run_fut = std::panic::AssertUnwindSafe(runner.run_full(prompt, workdir));
-    let out = match tokio::time::timeout(
-        std::time::Duration::from_secs(FIRE_TIMEOUT_SECS),
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(secs),
         futures::FutureExt::catch_unwind(run_fut),
     )
     .await
     {
-        Err(_) => {
-            let msg = "fire exceeded 600s";
-            return (
-                fail(msg.to_string()),
-                failure_delivery(deliver, &job, now, msg),
-            );
-        }
-        Ok(Err(_)) => {
-            let msg = "agent run panicked";
-            return (
-                fail(msg.to_string()),
-                failure_delivery(deliver, &job, now, msg),
-            );
-        }
-        Ok(Ok(Err(e))) => {
-            let msg = format!("agent run failed: {e:#}");
-            return (
-                fail(msg.clone()),
-                failure_delivery(deliver, &job, now, &msg),
-            );
-        }
-        Ok(Ok(Ok(out))) => out,
+        Err(_) => Err(format!("fire exceeded {secs}s")),
+        Ok(Err(_)) => Err("agent run panicked".to_string()),
+        Ok(Ok(Err(e))) => Err(format!("agent run failed: {e:#}")),
+        Ok(Ok(Ok(out))) => Ok(out),
+    }
+}
+
+pub async fn finish(
+    store: &crate::cron::CronStore,
+    deliver: &SaveLocalDeliver,
+    ready: ReadyFire,
+    now: i64,
+    out: Result<FireOutput, String>,
+    elapsed_ms: u64,
+) -> (crate::cron::RunStatus, Option<DeliveredFire>) {
+    use crate::cron::RunStatus;
+    let ReadyFire { job, input, .. } = ready;
+    let history = crate::cron_digest::load(store.dir(), &job.id);
+    let note = |status: &str, output: Option<String>| {
+        crate::cron_digest::record(
+            store.dir(),
+            &job.id,
+            crate::cron_digest::Run {
+                at: now,
+                status: status.to_string(),
+                input: input.clone(),
+                output,
+            },
+        )
     };
-    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let out = match out {
+        Err(msg) => {
+            let digest = crate::cron_digest::digest(&[&msg]);
+            let repeat = history.output_unchanged(&digest, true);
+            note("error", Some(digest));
+            mark_failed(store, &job, &msg);
+            let shown = if repeat {
+                None
+            } else {
+                failure_delivery(deliver, &job, now, &msg)
+            };
+            return (RunStatus::Error, shown);
+        }
+        Ok(out) => out,
+    };
     if crate::cron_fire::is_silent_response(&out.final_text) {
+        note("silent", None);
+        let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
+        return (RunStatus::Ok, None);
+    }
+    let digest = crate::cron_digest::digest(&[&out.final_text]);
+    if history.output_unchanged(&digest, false) {
+        note("unchanged", Some(digest));
         let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
         return (RunStatus::Ok, None);
     }
     match deliver.deliver_full(&job, now, &out, elapsed_ms).await {
         Ok(saved) => {
+            note("ok", Some(digest));
             let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
             (RunStatus::Ok, Some(saved))
         }
         Err(msg) => {
+            note("delivery_failed", Some(digest));
             let _ = store.mark_done(
                 &job.id,
                 job.fire_claim.as_ref(),
@@ -319,6 +418,58 @@ pub async fn fire_one(
             (RunStatus::DeliveryFailed, None)
         }
     }
+}
+
+pub const MAX_BATCH: usize = 4;
+
+pub async fn run_group(
+    store: &crate::cron::CronStore,
+    runner: &dyn AsyncRunner,
+    deliver: &SaveLocalDeliver,
+    group: Vec<ReadyFire>,
+    now: i64,
+) -> Vec<(crate::cron::RunStatus, Option<DeliveredFire>)> {
+    let started = std::time::Instant::now();
+    if group.len() == 1 {
+        let ready = group.into_iter().next().expect("one fire");
+        let out = run_guarded(
+            runner,
+            ready.prompt.clone(),
+            ready.workdir.clone(),
+            FIRE_TIMEOUT_SECS,
+        )
+        .await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        return vec![finish(store, deliver, ready, now, out, elapsed_ms).await];
+    }
+    let tasks: Vec<(String, String)> = group
+        .iter()
+        .map(|r| (r.job.id.clone(), r.prompt.clone()))
+        .collect();
+    let ids: Vec<String> = tasks.iter().map(|(id, _)| id.clone()).collect();
+    let prompt = crate::cron_fire::assemble_batch_prompt(&tasks);
+    let cap = (crate::cron::store::FIRE_CLAIM_TTL_SECS - 60).max(FIRE_TIMEOUT_SECS as i64) as u64;
+    let secs = (FIRE_TIMEOUT_SECS * group.len() as u64).min(cap);
+    let out = run_guarded(runner, prompt, group[0].workdir.clone(), secs).await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let parts: Vec<Result<FireOutput, String>> = match out {
+        Err(msg) => vec![Err(msg); group.len()],
+        Ok(out) => crate::cron_fire::split_batch_reply(&out.final_text, &ids)
+            .into_iter()
+            .map(|section| {
+                let final_text = section.unwrap_or_else(|| out.final_text.clone());
+                Ok(FireOutput {
+                    transcript: out.transcript.clone(),
+                    final_text,
+                })
+            })
+            .collect(),
+    };
+    let mut results = Vec::new();
+    for (ready, part) in group.into_iter().zip(parts) {
+        results.push(finish(store, deliver, ready, now, part, elapsed_ms).await);
+    }
+    results
 }
 
 fn failure_delivery(
@@ -424,7 +575,9 @@ fn post_to_session_inbox(
         fired.excerpt.clone()
     };
 
+    drop_stale_entries(&dir, &fired.id, &fired.name);
     let entry = serde_json::json!({
+        "job_id": fired.id,
         "card": format!("cron: {}", format_fire_chat(fired)),
         "prompt": crate::cron_fire::mirror_message(&fired.name, &body),
         "name": fired.name,
@@ -434,6 +587,33 @@ fn post_to_session_inbox(
         "elapsed_ms": fired.elapsed_ms,
     });
     write_entry(&dir, &entry.to_string())
+}
+
+fn drop_stale_entries(dir: &std::path::Path, id: &str, name: &str) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.filter_map(Result::ok) {
+        let path = e.path();
+        if e.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let Some(v) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        else {
+            continue;
+        };
+        let field = |k: &str| v.get(k).and_then(|x| x.as_str());
+        let is_cron = field("card").is_some_and(|c| c.starts_with("cron: "));
+        let same = match field("job_id") {
+            Some(j) => j == id,
+            None => field("name") == Some(name),
+        };
+        if is_cron && same {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 pub(crate) fn write_entry(dir: &std::path::Path, body: &str) -> anyhow::Result<()> {
@@ -456,6 +636,10 @@ pub(crate) fn write_entry(dir: &std::path::Path, body: &str) -> anyhow::Result<(
 }
 
 pub const MAX_CONCURRENT_FIRES: usize = 4;
+
+pub const MAX_DUE_PER_TICK: usize = 8;
+
+pub const BATCH_WINDOW_SECS: i64 = 120;
 
 pub async fn tick_once(
     store: &crate::cron::CronStore,
@@ -492,30 +676,45 @@ pub(crate) async fn tick_once_with(
         });
     }
     let owner = owner_stamp();
-    let mut fired_ids = Vec::new();
     let mut report = TickReport {
         fired: 0,
         errors: 0,
         delivered: Vec::new(),
     };
     let now = crate::cron::now_secs();
-    let due = store.claim_due_limited(now, &owner, MAX_CONCURRENT_FIRES, &fired_ids)?;
+    let due = store.claim_due_window(now, &owner, MAX_DUE_PER_TICK, &[], BATCH_WINDOW_SECS)?;
+    let prepared =
+        futures::future::join_all(due.into_iter().map(|job| prepare(store, job, now, deliver)))
+            .await;
 
-    let mut pending = futures::stream::FuturesUnordered::new();
-    for (idx, job) in due.into_iter().enumerate() {
-        fired_ids.push(job.id.clone());
-        pending.push(async move {
-            let out = fire_one(store, runner, job, now, deliver).await;
-            (idx, out)
-        });
-    }
     let mut ordered: Vec<Option<(crate::cron::RunStatus, Option<DeliveredFire>)>> = Vec::new();
-    ordered.resize_with(pending.len(), || None);
-    while let Some((idx, (status, saved))) = futures::StreamExt::next(&mut pending).await {
-        ordered[idx] = Some((status, saved));
+    ordered.resize_with(prepared.len(), || None);
+    let mut groups: Vec<Vec<(usize, ReadyFire)>> = Vec::new();
+    for (idx, p) in prepared.into_iter().enumerate() {
+        match p {
+            Prepared::Done(status, saved) => ordered[idx] = Some((status, saved)),
+            Prepared::Run(ready) => match groups
+                .iter_mut()
+                .find(|g| g.len() < MAX_BATCH && g[0].1.workdir == ready.workdir)
+            {
+                Some(g) => g.push((idx, ready)),
+                None => groups.push(vec![(idx, ready)]),
+            },
+        }
     }
-    for slot in ordered.into_iter().flatten() {
-        let (status, saved) = slot;
+    let runs = futures::StreamExt::collect::<Vec<_>>(futures::StreamExt::buffer_unordered(
+        futures::stream::iter(groups.into_iter().map(|g| async move {
+            let (idxs, fires): (Vec<usize>, Vec<ReadyFire>) = g.into_iter().unzip();
+            let outs = run_group(store, runner, deliver, fires, now).await;
+            idxs.into_iter().zip(outs).collect::<Vec<_>>()
+        })),
+        MAX_CONCURRENT_FIRES,
+    ))
+    .await;
+    for (idx, out) in runs.into_iter().flatten() {
+        ordered[idx] = Some(out);
+    }
+    for (status, saved) in ordered.into_iter().flatten() {
         report.fired += 1;
         if !matches!(status, crate::cron::RunStatus::Ok) {
             report.errors += 1;

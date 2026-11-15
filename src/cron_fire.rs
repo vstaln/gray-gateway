@@ -361,5 +361,75 @@ pub fn write_local_output(
         let _ = std::fs::remove_file(&tmp);
     }
     result?;
+    prune_outputs(&dir, OUTPUT_KEEP);
     Ok(path)
+}
+
+pub const OUTPUT_KEEP: usize = 10;
+
+fn prune_outputs(dir: &std::path::Path, keep: usize) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut runs: Vec<(i64, PathBuf)> = rd
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let p = e.path();
+            let stem = p
+                .extension()
+                .filter(|x| *x == "md")
+                .and(p.file_stem())?
+                .to_str()?
+                .parse::<i64>()
+                .ok()?;
+            Some((stem, p))
+        })
+        .collect();
+    if runs.len() <= keep {
+        return;
+    }
+    runs.sort();
+    for (_, p) in &runs[..runs.len() - keep] {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+pub fn batch_marker(id: &str) -> String {
+    format!("### task {id}")
+}
+
+pub fn assemble_batch_prompt(tasks: &[(String, String)]) -> String {
+    let mut out = String::from(
+        "Several independent scheduled tasks are due. Do each one fully, in order. Your final reply must have one section per task, each starting with its header line exactly as written below, followed by that task's reply. Write [silent] as a task's whole reply when it asks for silence or has nothing to report.\n\n",
+    );
+    for (id, prompt) in tasks {
+        out.push_str(&batch_marker(id));
+        out.push('\n');
+        out.push_str(prompt.trim());
+        out.push_str("\n\n");
+    }
+    out
+}
+
+pub fn split_batch_reply(text: &str, ids: &[String]) -> Vec<Option<String>> {
+    let mut sections: Vec<Option<String>> = vec![None; ids.len()];
+    let mut current: Option<usize> = None;
+    for line in text.lines() {
+        let trimmed = line.trim().trim_matches('*').trim();
+        if let Some(i) = ids.iter().position(|id| trimmed == batch_marker(id)) {
+            current = Some(i);
+            sections[i] = Some(String::new());
+            continue;
+        }
+        if let Some(i) = current
+            && let Some(buf) = sections[i].as_mut()
+        {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    sections
+        .into_iter()
+        .map(|s| s.map(|b| b.trim().to_string()))
+        .collect()
 }
