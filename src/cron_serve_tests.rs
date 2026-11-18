@@ -681,6 +681,10 @@ async fn a_repl_origin_fire_writes_the_session_inbox_schema_core_drains() {
         .await
         .unwrap();
     assert_eq!(rep.fired, 1);
+    assert!(
+        runner.seen.lock().unwrap().is_empty(),
+        "runs in the session, not headless"
+    );
     assert!(rep.delivered.iter().all(|d| !d.to_chat), "no chat route");
     assert!(!home.path().join("sessions").exists(), "no mirror");
 
@@ -716,12 +720,12 @@ async fn a_repl_origin_fire_writes_the_session_inbox_schema_core_drains() {
         "field \"elapsed_ms\" must be a u64: {v}"
     );
     assert_eq!(v["name"], "s3");
-    assert_eq!(v["body"], "toilets: a history");
+    assert_eq!(v["body"], "say hi");
     assert_eq!(v["status"], "ok");
     assert_eq!(v["reminder"], false);
-    assert_eq!(v["prompt"], "[Cron delivery: s3]\ntoilets: a history");
+    assert_eq!(v["prompt"], "[Cron delivery: s3]\nsay hi");
     assert!(
-        v["card"].as_str().unwrap().contains("toilets: a history"),
+        v["card"].as_str().unwrap().contains("say hi"),
         "card: {}",
         v["card"]
     );
