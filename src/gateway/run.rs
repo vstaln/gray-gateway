@@ -10,6 +10,7 @@ const TICK_KIND: &str = "gateway";
 
 pub async fn run_foreground() -> anyhow::Result<()> {
     let home = crate::vendor::gray_home()?;
+    let _host_lock = pid::claim_host(&home)?;
     let record = pid::claim(&home)?;
     let started_at = record.started_at;
 
