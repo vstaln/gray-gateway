@@ -324,6 +324,25 @@ pub async fn prepare(
     }
     let prompt =
         crate::cron_fire::assemble_fire_prompt(&job.prompt, &skill_paths, script_stdout.as_deref());
+    if let Some(session) = repl_session(&deliver.home, &job) {
+        let fired = DeliveredFire {
+            id: job.id.clone(),
+            name: job.name.clone(),
+            path: PathBuf::new(),
+            excerpt: prompt,
+            to_chat: false,
+            reminder: false,
+            failed: false,
+            elapsed_ms: 0,
+        };
+        return match post_to_session_inbox(&deliver.home, &session, &fired) {
+            Ok(()) => {
+                let _ = store.mark_done(&job.id, job.fire_claim.as_ref(), RunStatus::Ok, None);
+                Prepared::Done(RunStatus::Ok, Some(fired))
+            }
+            Err(e) => fail(format!("session inbox write failed: {e:#}")),
+        };
+    }
     Prepared::Run(ReadyFire {
         job,
         prompt,
@@ -513,6 +532,14 @@ fn failure_delivery(
 }
 
 pub const SESSION_PLATFORM: &str = "repl";
+
+fn repl_session(home: &std::path::Path, job: &crate::cron::CronJob) -> Option<String> {
+    let origin = job.origin.as_ref()?;
+    (matches!(job.deliver, crate::cron::Deliver::Origin)
+        && origin.platform == SESSION_PLATFORM
+        && crate::cron::chat_route::from_home(home).is_none())
+    .then(|| origin.chat.clone())
+}
 
 pub fn is_hosted(origin: &crate::cron::store::Origin) -> bool {
     origin.platform != SESSION_PLATFORM && origin.platform != "local"
