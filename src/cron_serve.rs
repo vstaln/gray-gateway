@@ -196,7 +196,7 @@ pub fn owner_stamp() -> String {
 
 pub enum Prepared {
     Done(crate::cron::RunStatus, Option<DeliveredFire>),
-    Run(ReadyFire),
+    Run(Box<ReadyFire>),
 }
 
 pub struct ReadyFire {
@@ -234,7 +234,7 @@ pub async fn fire_one(
             )
             .await;
             let elapsed_ms = started.elapsed().as_millis() as u64;
-            finish(store, deliver, ready, now, out, elapsed_ms).await
+            finish(store, deliver, *ready, now, out, elapsed_ms).await
         }
     }
 }
@@ -343,12 +343,12 @@ pub async fn prepare(
             Err(e) => fail(format!("session inbox write failed: {e:#}")),
         };
     }
-    Prepared::Run(ReadyFire {
+    Prepared::Run(Box::new(ReadyFire {
         job,
         prompt,
         workdir,
         input,
-    })
+    }))
 }
 
 pub async fn run_guarded(
@@ -724,8 +724,8 @@ pub(crate) async fn tick_once_with(
                 .iter_mut()
                 .find(|g| g.len() < MAX_BATCH && g[0].1.workdir == ready.workdir)
             {
-                Some(g) => g.push((idx, ready)),
-                None => groups.push(vec![(idx, ready)]),
+                Some(g) => g.push((idx, *ready)),
+                None => groups.push(vec![(idx, *ready)]),
             },
         }
     }
