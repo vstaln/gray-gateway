@@ -209,3 +209,87 @@ fn write_new(home: &Path, rec: &PidRecord) -> std::io::Result<()> {
     f.sync_all()?;
     Ok(())
 }
+
+pub fn host_lock_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("GRAY_HOST_LOCK_DIR") {
+        let t = v.trim();
+        if !t.is_empty() {
+            return PathBuf::from(t);
+        }
+    }
+    if let Ok(v) = std::env::var("XDG_STATE_HOME") {
+        let t = v.trim();
+        if !t.is_empty() {
+            return PathBuf::from(t).join("gray").join("locks");
+        }
+    }
+    #[cfg(windows)]
+    if let Ok(v) = std::env::var("LOCALAPPDATA") {
+        let t = v.trim();
+        if !t.is_empty() {
+            return PathBuf::from(t).join("gray").join("locks");
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("gray")
+            .join("locks");
+    }
+    std::env::temp_dir().join("gray-locks")
+}
+
+pub fn claim_host(home: &Path) -> anyhow::Result<std::fs::File> {
+    let dir = host_lock_dir();
+    let mut dir_builder = std::fs::DirBuilder::new();
+    dir_builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        dir_builder.mode(0o700);
+    }
+    dir_builder.create(&dir)?;
+    let lock_path = dir.join("gateway.lock");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let f = opts.open(&lock_path)?;
+    match f.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let rec_path = dir.join("gateway.json");
+            if let Ok(body) = std::fs::read_to_string(&rec_path) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(pid) = v.get("pid").and_then(|x| x.as_u64()) {
+                        let owner_home = v.get("home").and_then(|x| x.as_str()).unwrap_or("");
+                        if !owner_home.is_empty() {
+                            anyhow::bail!(
+                                "another gateway is already running (pid {pid}, home {owner_home})"
+                            );
+                        }
+                        anyhow::bail!("another gateway is already running (pid {pid})");
+                    }
+                }
+            }
+            anyhow::bail!("another gateway is already running");
+        }
+        Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+    }
+    let me = std::process::id();
+    let rec = serde_json::json!({
+        "pid": me,
+        "start_time": proc_start_time(me),
+        "home": home.display().to_string(),
+        "started_at": crate::cron::now_secs(),
+    });
+    let _ = std::fs::write(
+        dir.join("gateway.json"),
+        serde_json::to_string_pretty(&rec)?,
+    );
+    Ok(f)
+}
