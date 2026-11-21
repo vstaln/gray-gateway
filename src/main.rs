@@ -188,6 +188,9 @@ pub enum GatewayCmd {
     #[command(about = "Remove the installed service")]
     Uninstall,
 
+    #[command(about = "Inspect or change automatic resets for incoming chat turns")]
+    ResetPolicy(gateway::settings::ResetPolicyArgs),
+
     #[command(about = "Enable the gateway (the master switch)")]
     On,
 

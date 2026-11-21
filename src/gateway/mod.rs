@@ -309,6 +309,7 @@ pub async fn run_cli(cmd: crate::GatewayCmd) -> anyhow::Result<()> {
         "gateway is not supported on native Windows; use WSL for background scheduling"
     );
     match cmd {
+        GatewayCmd::ResetPolicy(args) => args.run(&crate::vendor::gray_home()?),
         GatewayCmd::Run => {
             ensure_gateway_on()?;
             run::run_foreground().await

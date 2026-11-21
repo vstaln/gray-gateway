@@ -15,7 +15,7 @@ pub fn manifest() -> Value {
         "completion": [
             "setup", "run", "status", "start", "stop", "restart", "install",
             "uninstall", "on", "off", "lifecycle", "send", "wake", "activity",
-            "pause", "resume", "inbox", "cron", "session",
+            "pause", "resume", "inbox", "cron", "session", "reset-policy",
         ],
     })
 }
@@ -92,6 +92,18 @@ fn gateway_command(argv: &[String]) -> Value {
     match argv.first().map(String::as_str) {
         Some("on") => json!({"text": crate::gateway::toggle(true)}),
         Some("off") => json!({"text": crate::gateway::toggle(false)}),
+        Some("reset-policy") => {
+            let result = if argv.len() == 1 {
+                crate::vendor::gray_home()
+                    .and_then(|home| crate::gateway::settings::ResetPolicy::display(&home))
+            } else {
+                Ok(
+                    "To edit locally, use `gray gateway reset-policy <none|idle|daily|both>`."
+                        .into(),
+                )
+            };
+            json!({"text": result.unwrap_or_else(|err| format!("{err:#}"))})
+        }
         _ => match crate::vendor::gray_home() {
             Ok(home) => {
                 let (_, lines) = crate::gateway::report(&home);
