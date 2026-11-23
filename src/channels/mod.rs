@@ -352,6 +352,27 @@ fn json_error(message: &str) -> Value {
     serde_json::json!({"content": message, "is_error": true})
 }
 
+/// Repoint every channel's existing service definition at this binary.
+///
+/// Runs when the sidecar starts, which is once per gray session, so an
+/// upgrade needs no manual step: the old standalone binaries are gone, and
+/// anything still exec-ing them is switched to `gray-gateway <channel> run`
+/// on the first session after the upgrade, with the supervisor told to pick
+/// it up. The rewrite is idempotent, so this happens once; a service that is
+/// not running is only rewritten, never started.
+pub fn adopt_services() {
+    for part in PARTS {
+        for path in common::service_migrate::adopt(part.name) {
+            eprintln!(
+                "{}: repointed at {} {}",
+                path.display(),
+                env!("CARGO_PKG_NAME"),
+                part.name
+            );
+        }
+    }
+}
+
 /// Run one channel's former CLI: `gray-gateway <channel> <args…>`.
 ///
 /// Every former binary's surface — `setup`, `run`, `sidecar`, `install`,

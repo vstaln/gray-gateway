@@ -85,11 +85,22 @@ and `--help` unchanged:
 | `gray webchat` | `gray gateway webchat` |
 | `gray mattermost post …` | `gray gateway mattermost post …` |
 
-The eight big channels keep their own long-lived service under their
-existing unit names (`gray-telegram.service`, `gray-discord.service`, …),
-now execing `gray-gateway <channel> run`. The gateway daemon does not absorb
-them. `gray gateway <channel> install` writes the unit, and `setup`,
-`status`, `stop`, `restart`, `doctor` and `uninstall` behave as they did.
+The eight big channels keep their own long-lived service under the unit
+names they already use (`gray-discord-plugin.service`,
+`gray-telegram-plugin.service`, `gray-slack-plugin.service`, and
+`gray-signal.service`, `gray-matrix.service`, `gray-irc.service`,
+`gray-email.service`, `gray-ntfy.service`), now execing
+`gray-gateway <channel> run`. The gateway daemon does not absorb them.
+`gray gateway <channel> install` writes the unit, and `setup`, `status`,
+`stop`, `restart`, `doctor` and `uninstall` behave as they did.
+
+An existing install needs no manual step: when the sidecar starts — once per
+session — any runit `run` script or systemd user unit of a channel that
+still execs the old standalone binary is repointed at
+`gray-gateway <channel> run` with the rest of its arguments kept, and the
+supervisor is told to re-read it (`sv restart`, or `systemctl --user
+daemon-reload`). A service that is not running is only rewritten, never
+started. The rewrite is idempotent.
 
 Config and state paths are unchanged, so an existing setup keeps working:
 `~/.config/gray-telegram/config.json`, `~/.config/gray-discord/`,
