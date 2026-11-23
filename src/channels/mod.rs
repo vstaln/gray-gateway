@@ -360,8 +360,8 @@ fn json_error(message: &str) -> Value {
 /// on the first session after the upgrade, with the supervisor told to pick
 /// it up. The rewrite is idempotent, so this happens once; a service that is
 /// not running is only rewritten, never started.
-pub fn adopt_services() {
-    for part in PARTS {
+pub fn adopt_services(parts: &Parts) {
+    for part in PARTS.iter().filter(|p| parts.on(p.name)) {
         for path in common::service_migrate::adopt(part.name) {
             eprintln!(
                 "{}: repointed at {} {}",

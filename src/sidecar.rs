@@ -188,7 +188,7 @@ impl Drop for CronTicker {
 }
 
 pub async fn run(parts: &crate::parts::Parts) -> anyhow::Result<()> {
-    crate::channels::adopt_services();
+    crate::channels::adopt_services(parts);
     let _cron_ticker = CronTicker::start();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let stdin = tokio::io::stdin();
