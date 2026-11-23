@@ -249,6 +249,31 @@ fn systemd_quote(s: &str) -> String {
     )
 }
 
+/// Whether a process is running this definition's current exec line, in which
+/// case rewriting it would swap the file under a live daemon.
+fn is_running(def: &Definition) -> bool {
+    let argv = exec_argv(def);
+    let Some(binary) = argv.first() else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            continue;
+        };
+        let words: Vec<&[u8]> = cmdline.split(|b| *b == 0).collect();
+        if words.first().map(|w| String::from_utf8_lossy(w)) == Some(binary.as_str().into()) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Point every existing definition for `channel` at this build. Returns the
 /// paths rewritten; a definition that already names this binary is left
 /// untouched, so running it twice rewrites nothing the second time.
@@ -258,7 +283,7 @@ pub fn adopt(channel: &str) -> Vec<PathBuf> {
     };
     let mut touched = Vec::new();
     for def in find(channel) {
-        if is_current(&def, channel, &exe) {
+        if is_current(&def, channel, &exe) || is_running(&def) {
             continue;
         }
         let Some(new_body) = rewrite(&def, channel, &exe) else {
