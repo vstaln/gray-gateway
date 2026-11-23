@@ -26,10 +26,10 @@ impl RateLimiter {
     /// is expected to say so and stop.
     pub fn allow(&mut self, key: &str) -> bool {
         let now = Instant::now();
-        if let Some(until) = self.blocked_until.get(key) {
-            if *until > now {
-                return false;
-            }
+        if let Some(until) = self.blocked_until.get(key)
+            && *until > now
+        {
+            return false;
         }
         let q = self.events.entry(key.to_string()).or_default();
         while let Some(front) = q.front() {

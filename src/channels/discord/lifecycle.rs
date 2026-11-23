@@ -208,16 +208,16 @@ pub fn shutdown_targets<'a>(
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for channel in running {
-        if let Ok(ch) = channel.parse::<u64>() {
-            if seen.insert(ch) {
-                out.push((ch, goodbye.active.as_str()));
-            }
+        if let Ok(ch) = channel.parse::<u64>()
+            && seen.insert(ch)
+        {
+            out.push((ch, goodbye.active.as_str()));
         }
     }
-    if let Ok(ch) = home.parse::<u64>() {
-        if seen.insert(ch) {
-            out.push((ch, goodbye.home.as_str()));
-        }
+    if let Ok(ch) = home.parse::<u64>()
+        && seen.insert(ch)
+    {
+        out.push((ch, goodbye.home.as_str()));
     }
     out
 }

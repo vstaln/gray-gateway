@@ -5,6 +5,7 @@ pub mod config;
 pub mod doctor;
 pub mod gateway;
 pub mod lifecycle;
+#[allow(clippy::module_inception)]
 pub mod matrix;
 pub mod pairing;
 pub mod runner;

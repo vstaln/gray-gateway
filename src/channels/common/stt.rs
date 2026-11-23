@@ -70,10 +70,10 @@ async fn ask(config: &Value, method: &str, params: Value) -> Result<Value, Strin
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    if let Some(home) = config.get("gray_home").and_then(Value::as_str) {
-        if !home.is_empty() {
-            cmd.env("GRAY_HOME", home);
-        }
+    if let Some(home) = config.get("gray_home").and_then(Value::as_str)
+        && !home.is_empty()
+    {
+        cmd.env("GRAY_HOME", home);
     }
     let mut child = cmd
         .spawn()

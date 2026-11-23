@@ -276,66 +276,60 @@ impl Daemon {
         // Headless `gray cmd` surface: `!cmd`, `/cmd`, `bot: cmd`. A hit
         // answers inline and never reaches the queue; an unknown name is
         // an ordinary prompt.
-        if let Some((name, args)) = parsed.filter(|_| steer.is_none()) {
-            if let Some(outcome) = self
+        if let Some((name, args)) = parsed.filter(|_| steer.is_none())
+            && let Some(outcome) = self
                 .commands
                 .dispatch(&self.config, &self.config_path, &conversation, &name, &args)
                 .await
-            {
-                match outcome {
-                    crate::channels::matrix::commands::Outcome::Text(reply) => {
-                        let reply = if name == "help" {
-                            format!("{reply}{}", crate::channels::matrix::busy::help_suffix("/"))
-                        } else {
-                            reply
-                        };
-                        let reply = self.pager.first(&conversation, &reply);
-                        if let Err(e) = crate::channels::matrix::matrix::send_long(
-                            &self.rest, room_id, &reply, 0,
-                        )
-                        .await
-                        {
-                            log_failure("command reply", room_id, &e);
-                        }
+        {
+            match outcome {
+                crate::channels::matrix::commands::Outcome::Text(reply) => {
+                    let reply = if name == "help" {
+                        format!("{reply}{}", crate::channels::matrix::busy::help_suffix("/"))
+                    } else {
+                        reply
+                    };
+                    let reply = self.pager.first(&conversation, &reply);
+                    if let Err(e) =
+                        crate::channels::matrix::matrix::send_long(&self.rest, room_id, &reply, 0)
+                            .await
+                    {
+                        log_failure("command reply", room_id, &e);
                     }
-                    crate::channels::matrix::commands::Outcome::Prompt { prompt, fallback } => {
-                        let capacity = self
-                            .config
-                            .get("queue_capacity")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(1000);
-                        let id = format!("mx:{event_id}:cmd");
-                        match self.store.enqueue(
-                            &id,
-                            room_id,
-                            sender,
-                            &conversation,
-                            &prompt,
-                            capacity,
-                        ) {
-                            Ok(true) => {
-                                if !fallback.trim().is_empty() {
-                                    let html = crate::channels::matrix::text::md_to_html(&fallback);
-                                    let _ = self.rest.send_text(room_id, &fallback, &html).await;
-                                }
+                }
+                crate::channels::matrix::commands::Outcome::Prompt { prompt, fallback } => {
+                    let capacity = self
+                        .config
+                        .get("queue_capacity")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(1000);
+                    let id = format!("mx:{event_id}:cmd");
+                    match self
+                        .store
+                        .enqueue(&id, room_id, sender, &conversation, &prompt, capacity)
+                    {
+                        Ok(true) => {
+                            if !fallback.trim().is_empty() {
+                                let html = crate::channels::matrix::text::md_to_html(&fallback);
+                                let _ = self.rest.send_text(room_id, &fallback, &html).await;
                             }
-                            Ok(false) => {}
-                            Err(e) => {
-                                let _ = self
-                                    .rest
-                                    .send_text(
-                                        room_id,
-                                        "Queue full; try again later.",
-                                        "Queue full; try again later.",
-                                    )
-                                    .await;
-                                eprintln!("[matrix] command turn enqueue failed: {e}");
-                            }
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            let _ = self
+                                .rest
+                                .send_text(
+                                    room_id,
+                                    "Queue full; try again later.",
+                                    "Queue full; try again later.",
+                                )
+                                .await;
+                            eprintln!("[matrix] command turn enqueue failed: {e}");
                         }
                     }
                 }
-                return;
             }
+            return;
         }
 
         if steer.is_none()
@@ -815,13 +809,12 @@ pub async fn run(config_path: &Path) -> Result<(), String> {
                     let _ = daemon.store.meta_set(SINCE_KEY, &next);
                 }
                 // Boot notice once, on the first live cursor.
-                if let Some(text) = notice.take() {
-                    if !daemon.home_room.is_empty() {
-                        let html = crate::channels::matrix::text::md_to_html(&text);
-                        if let Err(e) = daemon.rest.send_text(&daemon.home_room, &text, &html).await
-                        {
-                            log_failure("boot notice", &daemon.home_room, &e);
-                        }
+                if let Some(text) = notice.take()
+                    && !daemon.home_room.is_empty()
+                {
+                    let html = crate::channels::matrix::text::md_to_html(&text);
+                    if let Err(e) = daemon.rest.send_text(&daemon.home_room, &text, &html).await {
+                        log_failure("boot notice", &daemon.home_room, &e);
                     }
                 }
             }

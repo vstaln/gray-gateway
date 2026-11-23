@@ -219,11 +219,11 @@ async fn session(daemon: &Daemon, shutdown: &Arc<tokio::sync::Notify>) -> Result
         "{}/{topic}/json?poll=1",
         crate::channels::ntfy::ntfy::server(&daemon.config)
     );
-    if let Ok(Some(since)) = daemon.store.meta_get("since") {
-        if let Ok(ts) = since.parse::<f64>() {
-            // Overlap a hair: ids dedupe replays.
-            url = format!("{url}&since={}", (ts - 5.0).max(0.0) as u64);
-        }
+    if let Ok(Some(since)) = daemon.store.meta_get("since")
+        && let Ok(ts) = since.parse::<f64>()
+    {
+        // Overlap a hair: ids dedupe replays.
+        url = format!("{url}&since={}", (ts - 5.0).max(0.0) as u64);
     }
     let mut req = daemon.client.get(&url);
     if let Some(auth) = crate::channels::ntfy::ntfy::auth_header(&daemon.config) {

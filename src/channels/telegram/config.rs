@@ -14,9 +14,6 @@ pub fn default_path() -> PathBuf {
     home.join(".config/gray-telegram/config.json")
 }
 
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
-
 /// A Telegram id as a string: digits, optionally negative (group chat ids
 /// are negative; user ids and private chat ids are positive). Kept as a
 /// string in config so an allowlist row and a chat id compare cleanly.
@@ -69,10 +66,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     if !data.get("chat_id").is_some_and(telegram_id) {
         return Err("chat_id must be a Telegram chat ID".to_string());
     }
-    if let Some(owner) = data.get("owner_id") {
-        if !user_id(owner) {
-            return Err("owner_id must be a Telegram user ID".to_string());
-        }
+    if let Some(owner) = data.get("owner_id")
+        && !user_id(owner)
+    {
+        return Err("owner_id must be a Telegram user ID".to_string());
     }
     if let Some(users) = data.get("allowed_users") {
         let ok = users.as_array().is_some_and(|a| a.iter().all(user_id));

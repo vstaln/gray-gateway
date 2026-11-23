@@ -386,18 +386,18 @@ impl Rest {
             .get("x-ratelimit-global")
             .map(|v| v == "true")
             .unwrap_or(false);
-        if global_limit {
-            if let (Some(limit), Some(remaining), Some(reset_after)) = (
+        if global_limit
+            && let (Some(limit), Some(remaining), Some(reset_after)) = (
                 header("x-ratelimit-limit").and_then(|v| v.parse::<u32>().ok()),
                 header("x-ratelimit-remaining").and_then(|v| v.parse::<u32>().ok()),
                 header("x-ratelimit-reset-after").and_then(|v| v.parse::<f64>().ok()),
-            ) {
-                state.global = RateBucket {
-                    limit,
-                    remaining,
-                    reset_at: now + Duration::from_secs_f64(reset_after.max(0.0)),
-                };
-            }
+            )
+        {
+            state.global = RateBucket {
+                limit,
+                remaining,
+                reset_at: now + Duration::from_secs_f64(reset_after.max(0.0)),
+            };
         }
     }
 

@@ -265,13 +265,12 @@ pub fn merged(embed: &Value) -> (String, String, u32) {
         .get("footer")
         .and_then(|f| f.get("text"))
         .and_then(Value::as_str)
+        && !footer.trim().is_empty()
     {
-        if !footer.trim().is_empty() {
-            if !body.is_empty() {
-                body.push_str("\n\n");
-            }
-            body.push_str(&crate::channels::discord::text::sanitize(footer));
+        if !body.is_empty() {
+            body.push_str("\n\n");
         }
+        body.push_str(&crate::channels::discord::text::sanitize(footer));
     }
     (title, body, accent)
 }
@@ -354,10 +353,10 @@ fn validate_component(
                 .and_then(Value::as_u64)
                 .ok_or_else(|| "Button is missing a style".to_string())?;
             let label = component.get("label").and_then(Value::as_str);
-            if let Some(label) = label {
-                if label.chars().count() > 80 {
-                    return Err("Button label must contain at most 80 characters".to_string());
-                }
+            if let Some(label) = label
+                && label.chars().count() > 80
+            {
+                return Err("Button label must contain at most 80 characters".to_string());
             }
             match style {
                 1..=4 => {
@@ -471,10 +470,10 @@ fn validate_component(
             }
         }
         14 => {
-            if let Some(spacing) = component.get("spacing") {
-                if !matches!(spacing.as_u64(), Some(1) | Some(2)) {
-                    return Err("Separator spacing must be 1 or 2".to_string());
-                }
+            if let Some(spacing) = component.get("spacing")
+                && !matches!(spacing.as_u64(), Some(1) | Some(2))
+            {
+                return Err("Separator spacing must be 1 or 2".to_string());
             }
             if component
                 .get("divider")

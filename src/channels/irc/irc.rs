@@ -100,10 +100,10 @@ fn chunk_paragraph(paragraph: &str, limit: usize) -> Vec<String> {
         if split_at == 0 {
             split_at = limit.min(rest.len());
         }
-        if let Some(space) = rest[..split_at].rfind(' ') {
-            if space > split_at / 3 {
-                split_at = space;
-            }
+        if let Some(space) = rest[..split_at].rfind(' ')
+            && space > split_at / 3
+        {
+            split_at = space;
         }
         chunks.push(rest[..split_at].trim_end().to_string());
         rest = rest[split_at..].trim_start();

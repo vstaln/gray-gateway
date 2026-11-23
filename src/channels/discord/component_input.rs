@@ -337,10 +337,10 @@ fn collect_files(value: &Value) -> Result<Vec<String>, InteractionError> {
         for component in components {
             if let Some(attachments) = component.get("attachments").and_then(Value::as_array) {
                 for attachment in attachments {
-                    if let Some(id) = attachment.get("id").and_then(Value::as_str) {
-                        if id.len() <= 100 {
-                            files.push(id.to_string());
-                        }
+                    if let Some(id) = attachment.get("id").and_then(Value::as_str)
+                        && id.len() <= 100
+                    {
+                        files.push(id.to_string());
                     }
                 }
             }

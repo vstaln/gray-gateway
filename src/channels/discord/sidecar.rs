@@ -380,10 +380,10 @@ async fn send_text(params: &Value, config_path: &Path) -> Value {
             _ => return is_error(),
         }
     }
-    if !media.is_empty() {
-        if let Err(error) = upload(&rest, channel, &media, None).await {
-            return error;
-        }
+    if !media.is_empty()
+        && let Err(error) = upload(&rest, channel, &media, None).await
+    {
+        return error;
     }
     let files = if media.is_empty() {
         String::new()
@@ -944,10 +944,9 @@ fn seed_modal_control(
 ) {
     if let crate::channels::discord::component_protocol::ModalControl::StringSelect(select) =
         control
+        && let Ok(options) = serde_json::to_value(&select.options)
     {
-        if let Ok(options) = serde_json::to_value(&select.options) {
-            allocator.set_component_options(&select.logical_id.0, options);
-        }
+        allocator.set_component_options(&select.logical_id.0, options);
     }
 }
 
@@ -1111,10 +1110,10 @@ fn collect_file_refs(
 fn collect_file_ids(value: &Value, ids: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
-            if map.get("kind").and_then(Value::as_str) == Some("file") {
-                if let Some(id) = map.get("file_id").and_then(Value::as_str) {
-                    ids.push(id.to_string());
-                }
+            if map.get("kind").and_then(Value::as_str) == Some("file")
+                && let Some(id) = map.get("file_id").and_then(Value::as_str)
+            {
+                ids.push(id.to_string());
             }
             for child in map.values() {
                 collect_file_ids(child, ids);

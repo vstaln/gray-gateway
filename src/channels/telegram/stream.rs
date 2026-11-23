@@ -318,13 +318,12 @@ impl LiveView {
             }
             queue.push_back((chat.to_string(), message_id));
         }
-        if let Some(rest) = self.rest.as_ref() {
-            if let Err(error) = rest
+        if let Some(rest) = self.rest.as_ref()
+            && let Err(error) = rest
                 .set_reaction(chat, message_id, Some(RECEIVED_REACTION))
                 .await
-            {
-                log("reaction", chat, &error);
-            }
+        {
+            log("reaction", chat, &error);
         }
     }
 
@@ -417,13 +416,13 @@ impl LiveView {
                 });
             }
         }
-        if let Some(id) = screen.status_id {
-            if status_text != screen.status_shown {
-                return Some(Op::EditStatus {
-                    id,
-                    text: status_text,
-                });
-            }
+        if let Some(id) = screen.status_id
+            && status_text != screen.status_shown
+        {
+            return Some(Op::EditStatus {
+                id,
+                text: status_text,
+            });
         }
         None
     }
@@ -460,12 +459,12 @@ impl LiveView {
                 change(screen);
             }
         }
-        if matches!(inner.turns.get(conversation), Some(Turn::Opening(_))) {
-            if let Some(Turn::Opening(screen)) = inner.turns.remove(conversation) {
-                inner
-                    .turns
-                    .insert(conversation.to_string(), Turn::Live(screen));
-            }
+        if matches!(inner.turns.get(conversation), Some(Turn::Opening(_)))
+            && let Some(Turn::Opening(screen)) = inner.turns.remove(conversation)
+        {
+            inner
+                .turns
+                .insert(conversation.to_string(), Turn::Live(screen));
         }
     }
 

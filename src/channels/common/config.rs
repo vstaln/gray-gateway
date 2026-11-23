@@ -40,19 +40,19 @@ pub fn config_dir_of(config_path: &Path) -> PathBuf {
 /// Write JSON (pretty + trailing newline) atomically: parents 0700,
 /// temp file + rename, replacement mode 0600.
 pub fn atomic_json(path: &Path, data: &Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            let mut builder = std::fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            builder
-                .create(parent)
-                .map_err(|_| "cannot create config directory".to_string())?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
         }
+        builder
+            .create(parent)
+            .map_err(|_| "cannot create config directory".to_string())?;
     }
     let mut text =
         serde_json::to_string_pretty(data).map_err(|_| "cannot encode config".to_string())?;
@@ -104,12 +104,4 @@ pub fn bool_opt(data: &Value, key: &str) -> Result<(), String> {
         return Err(format!("{key} must be true or false"));
     }
     Ok(())
-}
-
-/// Whether a config has the one field that means "this bridge is set up" —
-/// the check `/telegram` runs to decide between `status` and `setup`.
-pub fn truthy(data: &Value, key: &str) -> bool {
-    data.get(key)
-        .and_then(Value::as_str)
-        .is_some_and(|s| !s.trim().is_empty())
 }

@@ -3,7 +3,6 @@
 //! Config: ~/.gray/gchat/config.json {"webhook"} or GCHAT_WEBHOOK.
 
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
 
 const NAME: &str = "gchat";
 

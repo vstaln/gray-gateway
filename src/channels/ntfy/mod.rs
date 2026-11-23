@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod doctor;
 pub mod gateway;
+#[allow(clippy::module_inception)]
 pub mod ntfy;
 pub mod runner;
 pub mod service;

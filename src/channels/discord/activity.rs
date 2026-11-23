@@ -151,10 +151,10 @@ fn stamp(row: &mut Value, scope: &mut ScopeState) {
             }
         }
         "tool_finished" => {
-            if !call_id.is_empty() {
-                if let Some(started) = scope.inflight.remove(&call_id) {
-                    row["elapsed_ms"] = millis(started.elapsed()).into();
-                }
+            if !call_id.is_empty()
+                && let Some(started) = scope.inflight.remove(&call_id)
+            {
+                row["elapsed_ms"] = millis(started.elapsed()).into();
             }
             if let Some(turn) = scope.started {
                 row["turn_ms"] = millis(turn.elapsed()).into();
@@ -505,10 +505,10 @@ pub fn render_card(rows: &[Value]) -> Option<String> {
                 }
             }
             "provider_retry" => {
-                if let Some(detail) = row.get("detail").and_then(Value::as_str) {
-                    if !detail.trim().is_empty() {
-                        notices.push(format!("Provider retry: {}", one_line(detail)));
-                    }
+                if let Some(detail) = row.get("detail").and_then(Value::as_str)
+                    && !detail.trim().is_empty()
+                {
+                    notices.push(format!("Provider retry: {}", one_line(detail)));
                 }
             }
             "compacted" => notices.push("Context compacted".to_string()),

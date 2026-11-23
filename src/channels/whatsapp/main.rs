@@ -234,25 +234,24 @@ fn serve(port: u16) -> Result<(), String> {
                 let _ = s.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
                 return;
             }
-            if let Ok(v) = serde_json::from_slice::<Value>(&body) {
-                if let Some(msgs) = v
+            if let Ok(v) = serde_json::from_slice::<Value>(&body)
+                && let Some(msgs) = v
                     .pointer("/entry/0/changes/0/value/messages")
                     .and_then(Value::as_array)
-                {
-                    let mut f = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(inbox_path())
-                        .unwrap();
-                    for m in msgs {
-                        let _ = writeln!(
-                            f,
-                            "{} ← {}: {}",
-                            m["timestamp"].as_str().unwrap_or(""),
-                            m["from"].as_str().unwrap_or("?"),
-                            m["text"]["body"].as_str().unwrap_or("[non-text]")
-                        );
-                    }
+            {
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(inbox_path())
+                    .unwrap();
+                for m in msgs {
+                    let _ = writeln!(
+                        f,
+                        "{} ← {}: {}",
+                        m["timestamp"].as_str().unwrap_or(""),
+                        m["from"].as_str().unwrap_or("?"),
+                        m["text"]["body"].as_str().unwrap_or("[non-text]")
+                    );
                 }
             }
             let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");

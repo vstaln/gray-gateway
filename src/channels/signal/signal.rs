@@ -167,10 +167,10 @@ async fn read_loop(
             }
             continue;
         }
-        if msg.get("method").and_then(Value::as_str) == Some("receive") {
-            if let Some(env) = msg.pointer("/params/envelope") {
-                let _ = envelopes.send(env.clone());
-            }
+        if msg.get("method").and_then(Value::as_str) == Some("receive")
+            && let Some(env) = msg.pointer("/params/envelope")
+        {
+            let _ = envelopes.send(env.clone());
         }
     }
     fail_pending(&pending);

@@ -5,19 +5,12 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Default config path: ~/.config/gray-email/config.json
-/// The user's home directory — `$HOME` on unix, `USERPROFILE` on Windows,
-/// the same places gray itself resolves.
-
 /// Default config path.
 pub fn default_path() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config/gray-email/config.json")
 }
-
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
 
 /// A plausible mailbox address: `local@domain`, no whitespace/controls,
 /// <=254 chars. Deliberately permissive — the wire decides for real.
@@ -87,21 +80,22 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     }
     int_in(data, "concurrency", 1, 16)?;
     for key in ["imap_security", "smtp_security"] {
-        if let Some(v) = data.get(key) {
-            if !security_valid(v) {
-                return Err(format!("{key} must be tls, starttls or plain"));
-            }
+        if let Some(v) = data.get(key)
+            && !security_valid(v)
+        {
+            return Err(format!("{key} must be tls, starttls or plain"));
         }
     }
-    if let Some(t) = data.get("restart_notification") {
-        if !t.is_boolean() {
-            return Err("restart_notification must be true or false".to_string());
-        }
+    if let Some(t) = data.get("restart_notification")
+        && !t.is_boolean()
+    {
+        return Err("restart_notification must be true or false".to_string());
     }
-    if let Some(h) = data.get("home_address") {
-        if !h.is_null() && !addr_valid(h) {
-            return Err("home_address must be an email address".to_string());
-        }
+    if let Some(h) = data.get("home_address")
+        && !h.is_null()
+        && !addr_valid(h)
+    {
+        return Err("home_address must be an email address".to_string());
     }
     for key in ["gray_bin", "gray_home", "workdir"] {
         let ok = data

@@ -56,10 +56,10 @@ pub fn parse(
         Some((name, target)) => (name, Some(target)),
         None => (body, None),
     };
-    if let Some(target) = target {
-        if !target.eq_ignore_ascii_case(bot_username) {
-            return None;
-        }
+    if let Some(target) = target
+        && !target.eq_ignore_ascii_case(bot_username)
+    {
+        return None;
     }
     match name.to_ascii_lowercase().as_str() {
         "start" => Some(BotCommand::Start),

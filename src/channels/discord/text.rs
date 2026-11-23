@@ -132,18 +132,18 @@ fn replace_emoji_names(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < text.len() {
-        if bytes[i] == b':' && bytes.get(i + 1) != Some(&b':') {
-            if let Some(close) = text[i + 1..].find(':') {
-                let name = &text[i + 1..i + 1 + close];
-                if (2..=32).contains(&name.len())
-                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                {
-                    if let Some((_, emoji)) = TABLE.iter().find(|(n, _)| *n == name) {
-                        out.push_str(emoji);
-                        i += 1 + close + 1;
-                        continue;
-                    }
-                }
+        if bytes[i] == b':'
+            && bytes.get(i + 1) != Some(&b':')
+            && let Some(close) = text[i + 1..].find(':')
+        {
+            let name = &text[i + 1..i + 1 + close];
+            if (2..=32).contains(&name.len())
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && let Some((_, emoji)) = TABLE.iter().find(|(n, _)| *n == name)
+            {
+                out.push_str(emoji);
+                i += 1 + close + 1;
+                continue;
             }
         }
         let len = text[i..].chars().next().map(char::len_utf8).unwrap_or(1);

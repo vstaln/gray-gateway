@@ -92,7 +92,7 @@ fn without_echo<T>(read: impl FnOnce() -> T) -> T {
     type Handle = *mut c_void;
     const STD_INPUT_HANDLE: Dword = -10i32 as Dword;
     const ENABLE_ECHO_INPUT: Dword = 0x0004;
-    extern "system" {
+    unsafe extern "system" {
         fn GetStdHandle(which: Dword) -> Handle;
         fn GetConsoleMode(handle: Handle, mode: *mut Dword) -> Bool;
         fn SetConsoleMode(handle: Handle, mode: Dword) -> Bool;
@@ -200,14 +200,14 @@ fn absolutize(path: &Path) -> std::path::PathBuf {
 }
 
 fn shellexpand_home(raw: &str) -> String {
-    if raw == "~" || raw.starts_with("~/") {
-        if let Some(home) = crate::channels::matrix::config::user_home() {
-            return if raw == "~" {
-                home.to_string_lossy().into_owned()
-            } else {
-                home.join(&raw[2..]).to_string_lossy().into_owned()
-            };
-        }
+    if (raw == "~" || raw.starts_with("~/"))
+        && let Some(home) = crate::channels::matrix::config::user_home()
+    {
+        return if raw == "~" {
+            home.to_string_lossy().into_owned()
+        } else {
+            home.join(&raw[2..]).to_string_lossy().into_owned()
+        };
     }
     raw.to_string()
 }

@@ -5,19 +5,12 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Default config path: ~/.config/gray-matrix/config.json
-/// The user's home directory — `$HOME` on unix, `USERPROFILE` on Windows,
-/// the same places gray itself resolves.
-
 /// Default config path.
 pub fn default_path() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config/gray-matrix/config.json")
 }
-
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
 
 /// A Matrix user id: `@localpart:server.name`, no spaces/control.
 pub fn user_id_valid(v: &Value) -> bool {
@@ -103,10 +96,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
             );
         }
     }
-    if let Some(home) = data.get("home_room") {
-        if !room_valid(home) {
-            return Err("home_room must be a room ID or alias".to_string());
-        }
+    if let Some(home) = data.get("home_room")
+        && !room_valid(home)
+    {
+        return Err("home_room must be a room ID or alias".to_string());
     }
     if let Some(free) = data.get("free_response_rooms") {
         let ok = free.as_array().is_some_and(|a| a.iter().all(room_valid));

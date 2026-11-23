@@ -94,13 +94,12 @@ impl LiveStdin {
 
 impl Drop for LiveStdin {
     fn drop(&mut self) {
-        if let Ok(mut live) = live_stdins().lock() {
-            if live
+        if let Ok(mut live) = live_stdins().lock()
+            && live
                 .get(&self.conversation)
                 .is_some_and(|s| std::sync::Arc::ptr_eq(s, &self.stdin))
-            {
-                live.remove(&self.conversation);
-            }
+        {
+            live.remove(&self.conversation);
         }
     }
 }
@@ -118,10 +117,10 @@ struct LivePid {
 
 impl LivePid {
     fn register(conversation: &str, pid: u32) -> Self {
-        if pid != 0 {
-            if let Ok(mut live) = live_pids().lock() {
-                live.insert(conversation.to_string(), pid);
-            }
+        if pid != 0
+            && let Ok(mut live) = live_pids().lock()
+        {
+            live.insert(conversation.to_string(), pid);
         }
         Self {
             conversation: conversation.to_string(),
@@ -132,10 +131,10 @@ impl LivePid {
 
 impl Drop for LivePid {
     fn drop(&mut self) {
-        if let Ok(mut live) = live_pids().lock() {
-            if live.get(&self.conversation) == Some(&self.pid) {
-                live.remove(&self.conversation);
-            }
+        if let Ok(mut live) = live_pids().lock()
+            && live.get(&self.conversation) == Some(&self.pid)
+        {
+            live.remove(&self.conversation);
         }
     }
 }

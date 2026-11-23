@@ -198,13 +198,12 @@ impl Live {
     }
 
     fn end(&self) {
-        if let Ok(mut map) = live().lock() {
-            if map
+        if let Ok(mut map) = live().lock()
+            && map
                 .get(&self.conversation)
                 .is_some_and(|p| std::sync::Arc::ptr_eq(p, &self.pipe))
-            {
-                map.remove(&self.conversation);
-            }
+        {
+            map.remove(&self.conversation);
         }
     }
 }

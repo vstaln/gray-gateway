@@ -92,10 +92,9 @@ pub fn coerce_document(raw: &Value, surface: Surface) -> Result<Value, String> {
         if let Some(content) = map
             .remove("content")
             .and_then(|t| t.as_str().map(str::to_string))
+            && !content.trim().is_empty()
         {
-            if !content.trim().is_empty() {
-                prefix.push(json!({"type": "text", "content": content}));
-            }
+            prefix.push(json!({"type": "text", "content": content}));
         }
         prefix.extend(components);
         let mut nodes = normalize_message_list(prefix);
@@ -153,10 +152,10 @@ fn locate(items: &[Value], path: &str, modal: bool) -> Option<String> {
             continue;
         }
         for key in ["components", "children"] {
-            if let Some(children) = item.get(key).and_then(Value::as_array) {
-                if let Some(deeper) = locate(children, &format!("{here}.{key}"), modal) {
-                    return Some(deeper);
-                }
+            if let Some(children) = item.get(key).and_then(Value::as_array)
+                && let Some(deeper) = locate(children, &format!("{here}.{key}"), modal)
+            {
+                return Some(deeper);
             }
         }
         let error = if modal {
@@ -628,10 +627,10 @@ fn normalize_string_select(map: &mut Map<String, Value>) {
             .map(|option| match option {
                 Value::String(text) => json!({"label": text, "value": text}),
                 Value::Object(mut option) => {
-                    if !option.contains_key("value") {
-                        if let Some(label) = option.get("label").cloned() {
-                            option.insert("value".into(), label);
-                        }
+                    if !option.contains_key("value")
+                        && let Some(label) = option.get("label").cloned()
+                    {
+                        option.insert("value".into(), label);
                     }
                     normalize_emoji(&mut option);
                     Value::Object(option)

@@ -137,11 +137,11 @@ impl Daemon {
     fn remember_alias(&self, envelope: &Value) {
         let number = envelope.get("sourceNumber").and_then(Value::as_str);
         let uuid = envelope.get("sourceUuid").and_then(Value::as_str);
-        if let (Some(n), Some(u)) = (number, uuid) {
-            if let Ok(mut map) = self.aliases.write() {
-                map.insert(n.to_string(), u.to_string());
-                map.insert(u.to_string(), n.to_string());
-            }
+        if let (Some(n), Some(u)) = (number, uuid)
+            && let Ok(mut map) = self.aliases.write()
+        {
+            map.insert(n.to_string(), u.to_string());
+            map.insert(u.to_string(), n.to_string());
         }
     }
 
@@ -223,14 +223,14 @@ impl Daemon {
             .cloned()
             .unwrap_or_default();
         let mut lines: Vec<String> = Vec::new();
-        if let Some(quote_text) = data.pointer("/quote/text").and_then(Value::as_str) {
-            if !quote_text.trim().is_empty() {
-                let author = data
-                    .pointer("/quote/author")
-                    .and_then(Value::as_str)
-                    .unwrap_or("someone");
-                lines.push(format!("[in reply to {author}: {}]", quote_text.trim()));
-            }
+        if let Some(quote_text) = data.pointer("/quote/text").and_then(Value::as_str)
+            && !quote_text.trim().is_empty()
+        {
+            let author = data
+                .pointer("/quote/author")
+                .and_then(Value::as_str)
+                .unwrap_or("someone");
+            lines.push(format!("[in reply to {author}: {}]", quote_text.trim()));
         }
         let trimmed = text.trim();
         if !trimmed.is_empty() {
@@ -923,12 +923,12 @@ pub async fn run(config_path: &Path) -> Result<(), String> {
             };
             if subscribed {
                 backoff_attempt = 0;
-                if let Some(text) = notice.take() {
-                    if !daemon.home_chat.is_empty() {
-                        daemon
-                            .reply(&daemon.home_chat.clone(), &text, "boot notice")
-                            .await;
-                    }
+                if let Some(text) = notice.take()
+                    && !daemon.home_chat.is_empty()
+                {
+                    daemon
+                        .reply(&daemon.home_chat.clone(), &text, "boot notice")
+                        .await;
                 }
                 break;
             }

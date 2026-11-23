@@ -135,10 +135,10 @@ impl Commands {
     /// cached, so a gray without `cmd` is not re-probed per message.
     async fn registry(&self, config: &Value, home: &Path) -> Registry {
         let mut guard = self.cache.lock().await;
-        if let Some(cached) = guard.as_ref() {
-            if cached.at.elapsed() < LIST_TTL {
-                return cached.registry.clone();
-            }
+        if let Some(cached) = guard.as_ref()
+            && cached.at.elapsed() < LIST_TTL
+        {
+            return cached.registry.clone();
         }
         let registry = match list_commands(config, home).await {
             Some(r) => r,
@@ -363,17 +363,17 @@ fn prepare_home(config: &Value, home: &Path) -> Result<(), String> {
     if provider_path == home.join("config.json") {
         return Ok(());
     }
-    if let Ok(bytes) = std::fs::read(&provider_path) {
-        if let Ok(mut provider) = serde_json::from_slice::<Value>(&bytes) {
-            if let Some(model) = config
-                .get("model")
-                .and_then(Value::as_str)
-                .filter(|m| !m.trim().is_empty())
-            {
-                provider["model"] = Value::String(model.to_string());
-            }
-            crate::channels::matrix::config::atomic_json(&home.join("config.json"), &provider)?;
+    if let Ok(bytes) = std::fs::read(&provider_path)
+        && let Ok(mut provider) = serde_json::from_slice::<Value>(&bytes)
+    {
+        if let Some(model) = config
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|m| !m.trim().is_empty())
+        {
+            provider["model"] = Value::String(model.to_string());
         }
+        crate::channels::matrix::config::atomic_json(&home.join("config.json"), &provider)?;
     }
     Ok(())
 }

@@ -144,13 +144,12 @@ impl Drop for LiveStdin {
 /// Removes `stdin` from the registry, but only if it is still the entry for
 /// `conversation` (a newer turn may have replaced it).
 fn unregister(conversation: &str, stdin: &SharedStdin) {
-    if let Ok(mut live) = live_stdins().lock() {
-        if live
+    if let Ok(mut live) = live_stdins().lock()
+        && live
             .get(conversation)
             .is_some_and(|s| std::sync::Arc::ptr_eq(s, stdin))
-        {
-            live.remove(conversation);
-        }
+    {
+        live.remove(conversation);
     }
 }
 
@@ -787,10 +786,10 @@ pub async fn run_gray_input(
         }
         // gray reports its request cap as a generic error row; the accounting
         // beside it says whether the cap is what stopped the turn.
-        if let Some(row) = consumed.terminal.as_ref().filter(|r| r["type"] == "error") {
-            if row["accounting"]["requests"].as_u64() >= Some(max_requests) {
-                return Err(RunError::RequestLimit(max_requests));
-            }
+        if let Some(row) = consumed.terminal.as_ref().filter(|r| r["type"] == "error")
+            && row["accounting"]["requests"].as_u64() >= Some(max_requests)
+        {
+            return Err(RunError::RequestLimit(max_requests));
         }
         if !consumed.protocol_ok {
             let e = RunError::Protocol(
@@ -1198,12 +1197,12 @@ async fn consume_ndjson(
             }
         };
         if row.get("type").and_then(Value::as_str) == Some("retract") {
-            if terminal.is_none() {
-                if let Some(cb) = progress.as_deref_mut() {
-                    let mut row = row;
-                    row["phase"] = Value::String("retract".to_string());
-                    (cb.call)(&mut cb.ctx, &row);
-                }
+            if terminal.is_none()
+                && let Some(cb) = progress.as_deref_mut()
+            {
+                let mut row = row;
+                row["phase"] = Value::String("retract".to_string());
+                (cb.call)(&mut cb.ctx, &row);
             }
             continue;
         }

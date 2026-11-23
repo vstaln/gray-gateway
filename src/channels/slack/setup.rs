@@ -170,15 +170,15 @@ fn absolutize(path: &Path) -> std::path::PathBuf {
 }
 
 fn shellexpand_home(raw: &str) -> String {
-    if raw == "~" || raw.starts_with("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            let home = Path::new(&home).to_string_lossy().into_owned();
-            return if raw == "~" {
-                home
-            } else {
-                format!("{home}/{}", &raw[2..])
-            };
-        }
+    if (raw == "~" || raw.starts_with("~/"))
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let home = Path::new(&home).to_string_lossy().into_owned();
+        return if raw == "~" {
+            home
+        } else {
+            format!("{home}/{}", &raw[2..])
+        };
     }
     raw.to_string()
 }
@@ -472,10 +472,10 @@ pub async fn run(path: &Path, io: &mut dyn Prompter) -> Result<bool, String> {
             }
         }
         for key in ["allowed_users", "allowed_channels"] {
-            if saved.get(key).is_none() {
-                if let Some(m) = merged.as_object_mut() {
-                    m.remove(key);
-                }
+            if saved.get(key).is_none()
+                && let Some(m) = merged.as_object_mut()
+            {
+                m.remove(key);
             }
         }
         if crate::channels::slack::config::validate_config(&merged).is_ok() {

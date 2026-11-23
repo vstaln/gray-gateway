@@ -6,6 +6,8 @@
 //! channel, and `gray-gateway <channel> <args…>` runs what used to be
 //! `gray-<channel> <args…>`.
 
+#![allow(dead_code)]
+
 pub mod common;
 
 pub mod discord;
@@ -128,24 +130,6 @@ fn channel_manifest(name: &str) -> Value {
         "mattermost" => mattermost::main::manifest(),
         _ => Value::Null,
     }
-}
-
-/// Serve one channel's long-lived loop, the way its own daemon did.
-pub fn serve(name: &str) -> anyhow::Result<()> {
-    let path = config_path(name);
-    match name {
-        "discord" => discord::sidecar::serve(&path),
-        "telegram" => telegram::sidecar::serve(&path),
-        "slack" => slack::sidecar::serve(&path),
-        "signal" => signal::sidecar::serve(&path),
-        "matrix" => matrix::sidecar::serve(&path),
-        "irc" => irc::sidecar::serve(&path),
-        "email" => email::sidecar::serve(&path),
-        "ntfy" => ntfy::sidecar::serve(&path),
-        "webchat" => webchat::main::serve()?,
-        other => anyhow::bail!("no service loop for {other}"),
-    }
-    Ok(())
 }
 
 /// The config file a channel reads, resolved exactly as its standalone
@@ -287,7 +271,7 @@ pub fn command_owner(parts: &Parts, command: &str) -> Option<&'static str> {
         .filter(|p| parts.on(p.name))
         .find(|p| {
             let m = channel_manifest(p.name);
-            strings(&m, "commands").iter().any(|c| *c == with_slash)
+            strings(&m, "commands").contains(&with_slash)
                 || strings(&m, "subcommands").iter().any(|c| c == command)
         })
         .map(|p| p.name)
@@ -374,6 +358,17 @@ fn json_error(message: &str) -> Value {
 /// `status`, `doctor`, and the rest — is reachable this way, with the config
 /// path defaulted to the channel's own.
 pub fn run_cli(name: &str, argv: &[String], enabled: bool) -> anyhow::Result<()> {
+    // Repoint an existing unit before anything else: its exec line may name a
+    // binary this merge removed, and that must be fixed whether or not the
+    // part is on.
+    if matches!(
+        argv.first().map(String::as_str),
+        Some("run" | "setup" | "install" | "restart" | "start" | "status")
+    ) {
+        for path in common::service_migrate::adopt(name) {
+            eprintln!("{}: now runs {}", path.display(), env!("CARGO_PKG_NAME"));
+        }
+    }
     let serving = matches!(
         argv.first().map(String::as_str),
         Some("run" | "sidecar" | "install" | "start" | "restart")

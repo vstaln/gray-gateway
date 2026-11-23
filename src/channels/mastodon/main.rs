@@ -3,7 +3,6 @@
 //! MASTODON_INSTANCE / MASTODON_TOKEN.
 
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
 
 const NAME: &str = "mastodon";
 

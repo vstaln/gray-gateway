@@ -14,9 +14,6 @@ pub fn default_path() -> PathBuf {
     home.join(".config/gray-discord/config.json")
 }
 
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
-
 /// Discord snowflake: ASCII digits, 0 < n < 2^64.
 pub fn snowflake(v: &Value) -> bool {
     match v.as_str() {
@@ -44,10 +41,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     if !data.get("channel_id").is_some_and(snowflake) {
         return Err("channel_id must be a Discord ID".to_string());
     }
-    if let Some(owner) = data.get("owner_id") {
-        if !snowflake(owner) {
-            return Err("owner_id must be a Discord ID".to_string());
-        }
+    if let Some(owner) = data.get("owner_id")
+        && !snowflake(owner)
+    {
+        return Err("owner_id must be a Discord ID".to_string());
     }
     if let Some(users) = data.get("allowed_users") {
         let ok = users.as_array().is_some_and(|a| a.iter().all(snowflake));
@@ -70,10 +67,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     {
         return Err("restart_notification must be true or false".to_string());
     }
-    if let Some(mode) = data.get("progress_mode") {
-        if !matches!(mode.as_str(), Some("verbose" | "commands" | "off")) {
-            return Err("progress_mode must be verbose, commands, or off".to_string());
-        }
+    if let Some(mode) = data.get("progress_mode")
+        && !matches!(mode.as_str(), Some("verbose" | "commands" | "off"))
+    {
+        return Err("progress_mode must be verbose, commands, or off".to_string());
     }
     int_in(data, "timeout_seconds", 1, 86400)?;
     int_in(data, "inactivity_seconds", 1, 86400)?;

@@ -343,10 +343,10 @@ pub async fn run_wired(
                 merged[k] = v.clone();
             }
         }
-        if saved.get("allowed_users").is_none() {
-            if let Some(m) = merged.as_object_mut() {
-                m.remove("allowed_users");
-            }
+        if saved.get("allowed_users").is_none()
+            && let Some(m) = merged.as_object_mut()
+        {
+            m.remove("allowed_users");
         }
         if crate::channels::discord::config::validate_config(&merged).is_ok() {
             saved = merged;
@@ -409,12 +409,12 @@ async fn prompt_checked_token(
         if token.is_empty() {
             return Err("A bot token is required".to_string());
         }
-        if let Some(why) = discord_check::token_shape_error(&token) {
-            if !numeric_warned {
-                numeric_warned = true;
-                io.print_line(why);
-                continue;
-            }
+        if let Some(why) = discord_check::token_shape_error(&token)
+            && !numeric_warned
+        {
+            numeric_warned = true;
+            io.print_line(why);
+            continue;
         }
         let why = if discord_check::has_inner_break(&token) {
             "That isn't a bot token (it contains a line break). Copy it again from the Bot page."
@@ -645,10 +645,10 @@ fn shellexpand_home(raw: &str) -> String {
         if let Some(home) = std::env::var_os("HOME") {
             return Path::new(&home).to_string_lossy().into_owned();
         }
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return format!("{}/{rest}", Path::new(&home).to_string_lossy());
-        }
+    } else if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return format!("{}/{rest}", Path::new(&home).to_string_lossy());
     }
     raw.to_string()
 }

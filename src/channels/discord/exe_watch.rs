@@ -36,10 +36,10 @@ impl ExeWatch {
     pub fn replaced(&self) -> bool {
         #[cfg(unix)]
         {
-            if let Ok(link) = std::fs::read_link("/proc/self/exe") {
-                if link.to_string_lossy().ends_with(" (deleted)") {
-                    return true;
-                }
+            if let Ok(link) = std::fs::read_link("/proc/self/exe")
+                && link.to_string_lossy().ends_with(" (deleted)")
+            {
+                return true;
             }
         }
         match std::fs::metadata(&self.path) {

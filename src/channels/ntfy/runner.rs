@@ -168,13 +168,12 @@ impl Live {
     }
 
     fn end(&self) {
-        if let Ok(mut map) = live().lock() {
-            if map
+        if let Ok(mut map) = live().lock()
+            && map
                 .get(&self.conversation)
                 .is_some_and(|p| std::sync::Arc::ptr_eq(p, &self.pipe))
-            {
-                map.remove(&self.conversation);
-            }
+        {
+            map.remove(&self.conversation);
         }
     }
 }
@@ -524,10 +523,10 @@ pub async fn run_gray(
 
     // gray reports its request cap as a generic error row; the accounting
     // beside it says whether the cap is what stopped the turn.
-    if let Some(row) = consumed.terminal.as_ref().filter(|r| r["type"] == "error") {
-        if row["accounting"]["requests"].as_u64() >= Some(max_requests) {
-            return Err(RunError::RequestLimit(max_requests));
-        }
+    if let Some(row) = consumed.terminal.as_ref().filter(|r| r["type"] == "error")
+        && row["accounting"]["requests"].as_u64() >= Some(max_requests)
+    {
+        return Err(RunError::RequestLimit(max_requests));
     }
     if !status.success() {
         return Err(RunError::Exit(status.code()));

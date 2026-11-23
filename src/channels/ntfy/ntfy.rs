@@ -62,10 +62,10 @@ pub fn auth_header(cfg: &Value) -> Option<String> {
 
 fn auth_map(cfg: &Value) -> reqwest::header::HeaderMap {
     let mut h = reqwest::header::HeaderMap::new();
-    if let Some(v) = auth_header(cfg) {
-        if let Ok(v) = reqwest::header::HeaderValue::from_str(&v) {
-            h.insert(reqwest::header::AUTHORIZATION, v);
-        }
+    if let Some(v) = auth_header(cfg)
+        && let Ok(v) = reqwest::header::HeaderValue::from_str(&v)
+    {
+        h.insert(reqwest::header::AUTHORIZATION, v);
     }
     h
 }

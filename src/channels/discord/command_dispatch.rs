@@ -146,20 +146,20 @@ fn rendered(ctx: &Ctx<'_>, embed: &Value, buttons: &[Value]) -> Vec<Value> {
             &body,
             crate::channels::discord::pager::PAGE_LIMIT,
         );
-        if pages.len() > 1 {
-            if let Ok(token) = crate::channels::discord::pager::mint(
+        if pages.len() > 1
+            && let Ok(token) = crate::channels::discord::pager::mint(
                 ctx.store,
                 ctx.user_id,
                 ctx.channel_id,
                 &pages,
                 &title,
                 accent,
-            ) {
-                let mut comps =
-                    crate::channels::discord::pager::components(&pages, 0, &token, &title, accent);
-                comps.extend(buttons.iter().cloned());
-                return comps;
-            }
+            )
+        {
+            let mut comps =
+                crate::channels::discord::pager::components(&pages, 0, &token, &title, accent);
+            comps.extend(buttons.iter().cloned());
+            return comps;
         }
     }
     match render::from_embed(embed, buttons) {
@@ -739,12 +739,8 @@ pub async fn stop_button(ctx: &Ctx<'_>, custom_id: &str, message: Option<&Value>
             .is_ok(),
         None => false,
     };
-    if !updated {
-        if let Err(e) = ctx.rest.defer_update(ctx.int_id, ctx.int_token).await {
-            crate::channels::discord::eprintln_stamped!(
-                "[discord] stop acknowledgement failed: {e}"
-            );
-        }
+    if !updated && let Err(e) = ctx.rest.defer_update(ctx.int_id, ctx.int_token).await {
+        crate::channels::discord::eprintln_stamped!("[discord] stop acknowledgement failed: {e}");
     }
 }
 

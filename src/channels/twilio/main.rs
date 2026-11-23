@@ -5,7 +5,6 @@
 //! TWILIO_SID / TWILIO_TOKEN / TWILIO_FROM.
 
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
 
 const NAME: &str = "twilio";
 

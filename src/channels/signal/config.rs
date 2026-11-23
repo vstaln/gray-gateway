@@ -5,19 +5,12 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Default config path: ~/.config/gray-signal/config.json
-/// The user's home directory — `$HOME` on unix, `USERPROFILE` on Windows,
-/// the same places gray itself resolves.
-
 /// Default config path.
 pub fn default_path() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config/gray-signal/config.json")
 }
-
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
 
 /// A phone number in E.164 form: `+` then 5-15 digits.
 pub fn number_valid(s: &str) -> bool {
@@ -107,10 +100,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
             }
         }
     }
-    if let Some(host) = data.get("daemon_host") {
-        if !host_valid(host) {
-            return Err("daemon_host must be a hostname or IP".to_string());
-        }
+    if let Some(host) = data.get("daemon_host")
+        && !host_valid(host)
+    {
+        return Err("daemon_host must be a hostname or IP".to_string());
     }
     int_in(data, "daemon_port", 1, 65535)?;
     // Inbound is allowlisted-only: the array may be empty (nobody admitted
@@ -125,10 +118,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
             return Err("allowed_groups must be an array of group ids".to_string());
         }
     }
-    if let Some(home) = data.get("home_chat") {
-        if !target_valid(home) {
-            return Err("home_chat must be a number, UUID, or group:<id>".to_string());
-        }
+    if let Some(home) = data.get("home_chat")
+        && !target_valid(home)
+    {
+        return Err("home_chat must be a number, UUID, or group:<id>".to_string());
     }
     if data.get("require_mention").is_some_and(|v| !v.is_boolean()) {
         return Err("require_mention must be true or false".to_string());

@@ -263,18 +263,17 @@ pub fn claim_host(home: &Path) -> anyhow::Result<std::fs::File> {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
             let rec_path = dir.join("gateway.json");
-            if let Ok(body) = std::fs::read_to_string(&rec_path) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                    if let Some(pid) = v.get("pid").and_then(|x| x.as_u64()) {
-                        let owner_home = v.get("home").and_then(|x| x.as_str()).unwrap_or("");
-                        if !owner_home.is_empty() {
-                            anyhow::bail!(
-                                "another gateway is already running (pid {pid}, home {owner_home})"
-                            );
-                        }
-                        anyhow::bail!("another gateway is already running (pid {pid})");
-                    }
+            if let Ok(body) = std::fs::read_to_string(&rec_path)
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(pid) = v.get("pid").and_then(|x| x.as_u64())
+            {
+                let owner_home = v.get("home").and_then(|x| x.as_str()).unwrap_or("");
+                if !owner_home.is_empty() {
+                    anyhow::bail!(
+                        "another gateway is already running (pid {pid}, home {owner_home})"
+                    );
                 }
+                anyhow::bail!("another gateway is already running (pid {pid})");
             }
             anyhow::bail!("another gateway is already running");
         }

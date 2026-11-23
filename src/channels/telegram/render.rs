@@ -182,10 +182,10 @@ fn split_html(html: &str, limit: usize) -> Vec<String> {
 
 fn next_token(text: &str, at: usize) -> (&str, usize) {
     let rest = &text[at..];
-    if rest.starts_with('<') {
-        if let Some(end) = rest.find('>') {
-            return (&rest[..=end], at + end + 1);
-        }
+    if rest.starts_with('<')
+        && let Some(end) = rest.find('>')
+    {
+        return (&rest[..=end], at + end + 1);
     }
     if rest.starts_with('&') {
         for (offset, ch) in rest.char_indices().skip(1) {
@@ -268,12 +268,12 @@ pub fn normalize_latex(md: &str) -> String {
             i += ch.len_utf8();
             continue;
         }
-        if bytes[i] == b'\\' {
-            if let Some((rep, adv)) = replace_latex_macro(&md[i..]) {
-                out.push_str(&rep);
-                i += adv;
-                continue;
-            }
+        if bytes[i] == b'\\'
+            && let Some((rep, adv)) = replace_latex_macro(&md[i..])
+        {
+            out.push_str(&rep);
+            i += adv;
+            continue;
         }
         let ch = md[i..].chars().next().unwrap();
         out.push(ch);
@@ -326,31 +326,28 @@ fn replace_latex_macro(s: &str) -> Option<(String, usize)> {
         ("\\Sigma", "Σ"),
         ("\\Omega", "Ω"),
     ];
-    if let Some(rest) = s.strip_prefix("\\frac{") {
-        if let Some((num, after_num)) = read_braced(rest) {
-            if let Some(after_open) = after_num.strip_prefix('{') {
-                if let Some((den, after_den)) = read_braced(after_open) {
-                    let consumed = s.len() - after_den.len();
-                    return Some((format!("({num})/({den})"), consumed));
-                }
-            }
-        }
+    if let Some(rest) = s.strip_prefix("\\frac{")
+        && let Some((num, after_num)) = read_braced(rest)
+        && let Some(after_open) = after_num.strip_prefix('{')
+        && let Some((den, after_den)) = read_braced(after_open)
+    {
+        let consumed = s.len() - after_den.len();
+        return Some((format!("({num})/({den})"), consumed));
     }
-    if let Some(rest) = s.strip_prefix("\\sqrt{") {
-        if let Some((inner, after)) = read_braced(rest) {
-            let consumed = s.len() - after.len();
-            return Some((format!("√({inner})"), consumed));
-        }
+    if let Some(rest) = s.strip_prefix("\\sqrt{")
+        && let Some((inner, after)) = read_braced(rest)
+    {
+        let consumed = s.len() - after.len();
+        return Some((format!("√({inner})"), consumed));
     }
     for (pat, rep) in MACROS {
-        if let Some(after) = s.strip_prefix(pat) {
-            if !after
+        if let Some(after) = s.strip_prefix(pat)
+            && !after
                 .chars()
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic())
-            {
-                return Some(((*rep).to_string(), pat.len()));
-            }
+        {
+            return Some(((*rep).to_string(), pat.len()));
         }
     }
     None

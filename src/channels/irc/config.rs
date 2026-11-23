@@ -5,19 +5,12 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Default config path: ~/.config/gray-irc/config.json
-/// The user's home directory — `$HOME` on unix, `USERPROFILE` on Windows,
-/// the same places gray itself resolves.
-
 /// Default config path.
 pub fn default_path() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config/gray-irc/config.json")
 }
-
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
 
 /// One IRC target: `#`/`&`/`+`/`!` channel or a bare nick, no spaces/ctrl.
 pub fn target_valid(v: &Value) -> bool {
@@ -77,23 +70,23 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     }
     int_in(data, "concurrency", 1, 16)?;
     for key in ["use_tls", "restart_notification"] {
-        if let Some(t) = data.get(key) {
-            if !t.is_boolean() {
-                return Err(format!("{key} must be true or false"));
-            }
+        if let Some(t) = data.get(key)
+            && !t.is_boolean()
+        {
+            return Err(format!("{key} must be true or false"));
         }
     }
     for key in ["server_password", "nickserv_password"] {
-        if let Some(v) = data.get(key) {
-            if !v.is_string() {
-                return Err(format!("{key} must be a string"));
-            }
+        if let Some(v) = data.get(key)
+            && !v.is_string()
+        {
+            return Err(format!("{key} must be a string"));
         }
     }
-    if let Some(h) = data.get("home_channel") {
-        if !target_valid(h) {
-            return Err("home_channel must be an IRC channel or nick".to_string());
-        }
+    if let Some(h) = data.get("home_channel")
+        && !target_valid(h)
+    {
+        return Err("home_channel must be an IRC channel or nick".to_string());
     }
     for key in ["gray_bin", "gray_home", "workdir"] {
         let ok = data

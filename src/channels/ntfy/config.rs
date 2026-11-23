@@ -5,18 +5,12 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The user's home directory — `$HOME` on unix, `USERPROFILE` on Windows,
-/// the same places gray itself resolves.
-
 /// Default config path: ~/.config/gray-ntfy/config.json
 pub fn default_path() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config/gray-ntfy/config.json")
 }
-
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
 
 /// One allowlist token: a title or tag a message must carry to reach gray.
 pub fn token_valid(s: &str) -> bool {
@@ -36,24 +30,23 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
         Some(s) if crate::channels::ntfy::ntfy::topic_valid(s) => {}
         _ => return Err("topic is missing or invalid; run setup".to_string()),
     }
-    if let Some(t) = data.get("publish_topic") {
-        if !t
+    if let Some(t) = data.get("publish_topic")
+        && !t
             .as_str()
             .is_some_and(crate::channels::ntfy::ntfy::topic_valid)
-        {
-            return Err("publish_topic must be a valid ntfy topic name".to_string());
-        }
+    {
+        return Err("publish_topic must be a valid ntfy topic name".to_string());
     }
-    if let Some(t) = data.get("token") {
-        if !t.is_string() {
-            return Err("token must be a string".to_string());
-        }
+    if let Some(t) = data.get("token")
+        && !t.is_string()
+    {
+        return Err("token must be a string".to_string());
     }
     for key in ["markdown", "allow_all"] {
-        if let Some(v) = data.get(key) {
-            if !v.is_boolean() {
-                return Err(format!("{key} must be true or false"));
-            }
+        if let Some(v) = data.get(key)
+            && !v.is_boolean()
+        {
+            return Err(format!("{key} must be true or false"));
         }
     }
     // Inbound is allowlisted-only: the array may be empty (every message is

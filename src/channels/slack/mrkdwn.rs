@@ -56,44 +56,44 @@ fn inline(text: &str) -> String {
                 continue;
             }
         }
-        if c == '~' && at(i + 1) == '~' {
-            if let Some(close) = find(&chars, i + 2, "~~") {
-                out.push('~');
-                out.push_str(&inline(&chars[i + 2..close].iter().collect::<String>()));
-                out.push('~');
-                i = close + 2;
-                continue;
-            }
+        if c == '~'
+            && at(i + 1) == '~'
+            && let Some(close) = find(&chars, i + 2, "~~")
+        {
+            out.push('~');
+            out.push_str(&inline(&chars[i + 2..close].iter().collect::<String>()));
+            out.push('~');
+            i = close + 2;
+            continue;
         }
         if c == '*' && at(i + 1) != ' ' && at(i + 1) != '\0' {
             // *italic* -> _italic_ (bold already consumed above)
-            if let Some(close) = find(&chars, i + 1, "*") {
-                if close > i + 1 {
-                    out.push('_');
-                    out.push_str(&inline(&chars[i + 1..close].iter().collect::<String>()));
-                    out.push('_');
-                    i = close + 1;
-                    continue;
-                }
+            if let Some(close) = find(&chars, i + 1, "*")
+                && close > i + 1
+            {
+                out.push('_');
+                out.push_str(&inline(&chars[i + 1..close].iter().collect::<String>()));
+                out.push('_');
+                i = close + 1;
+                continue;
             }
         }
         if c == '[' {
             // [label](url) -> <url|label>
-            if let Some(close) = find(&chars, i + 1, "]") {
-                if at(close + 1) == '(' {
-                    if let Some(paren) = find(&chars, close + 2, ")") {
-                        let label: String = chars[i + 1..close].iter().collect();
-                        let url: String = chars[close + 2..paren].iter().collect();
-                        if !url.trim().is_empty() {
-                            out.push('<');
-                            out.push_str(url.trim());
-                            out.push('|');
-                            out.push_str(&inline(&label));
-                            out.push('>');
-                            i = paren + 1;
-                            continue;
-                        }
-                    }
+            if let Some(close) = find(&chars, i + 1, "]")
+                && at(close + 1) == '('
+                && let Some(paren) = find(&chars, close + 2, ")")
+            {
+                let label: String = chars[i + 1..close].iter().collect();
+                let url: String = chars[close + 2..paren].iter().collect();
+                if !url.trim().is_empty() {
+                    out.push('<');
+                    out.push_str(url.trim());
+                    out.push('|');
+                    out.push_str(&inline(&label));
+                    out.push('>');
+                    i = paren + 1;
+                    continue;
                 }
             }
         }
@@ -239,10 +239,10 @@ pub fn chunk(text: &str) -> Vec<String> {
                 if nl > limit / 3 {
                     end = nl + 1;
                 }
-            } else if let Some(sp) = remaining[..end].rfind(' ') {
-                if sp > limit / 3 {
-                    end = sp + 1;
-                }
+            } else if let Some(sp) = remaining[..end].rfind(' ')
+                && sp > limit / 3
+            {
+                end = sp + 1;
             }
         }
         if end == 0 {

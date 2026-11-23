@@ -189,13 +189,12 @@ impl LiveStdin {
 
 impl Drop for LiveStdin {
     fn drop(&mut self) {
-        if let Ok(mut live) = live_stdins().lock() {
-            if live
+        if let Ok(mut live) = live_stdins().lock()
+            && live
                 .get(&self.conversation)
                 .is_some_and(|s| std::sync::Arc::ptr_eq(s, &self.stdin))
-            {
-                live.remove(&self.conversation);
-            }
+        {
+            live.remove(&self.conversation);
         }
     }
 }

@@ -272,10 +272,10 @@ fn settle_slot(key: &str) -> String {
 fn find_value(value: &Value, custom_id: &str) -> Option<String> {
     match value {
         Value::Object(map) => {
-            if map.get("custom_id").and_then(Value::as_str) == Some(custom_id) {
-                if let Some(text) = map.get("value").and_then(Value::as_str) {
-                    return Some(text.to_string());
-                }
+            if map.get("custom_id").and_then(Value::as_str) == Some(custom_id)
+                && let Some(text) = map.get("value").and_then(Value::as_str)
+            {
+                return Some(text.to_string());
             }
             map.values().find_map(|child| find_value(child, custom_id))
         }
@@ -912,21 +912,18 @@ impl<R, D> Runtime<R, D> {
             .collect();
         let components_for = |body: &crate::channels::discord::stream::Card| -> Vec<Value> {
             let mut components = body.components.clone();
-            if let Some(pages) = &body.pager {
-                if let Ok(token) = crate::channels::discord::pager::mint(
+            if let Some(pages) = &body.pager
+                && let Ok(token) = crate::channels::discord::pager::mint(
                     &self.store,
                     "*",
                     channel,
                     pages,
                     "",
                     crate::channels::discord::render::QUIET_ACCENT,
-                ) {
-                    if let Some(row) =
-                        crate::channels::discord::pager::nav_row(&token, 0, pages.len())
-                    {
-                        components.push(row);
-                    }
-                }
+                )
+                && let Some(row) = crate::channels::discord::pager::nav_row(&token, 0, pages.len())
+            {
+                components.push(row);
             }
             components
         };
@@ -1005,10 +1002,10 @@ impl<R, D> Runtime<R, D> {
                     }
                 }
                 crate::channels::discord::stream::Op::Delete { card, id } => {
-                    if let Some(ref rest) = self.rest {
-                        if let Err(error) = rest.delete_message(ch, &id).await {
-                            log_failure("delete", channel, &error);
-                        }
+                    if let Some(ref rest) = self.rest
+                        && let Err(error) = rest.delete_message(ch, &id).await
+                    {
+                        log_failure("delete", channel, &error);
                     }
                     if let Some(timeline) = self.timelines.lock().await.get_mut(key) {
                         timeline.deleted(card);
@@ -1028,10 +1025,10 @@ impl<R, D> Runtime<R, D> {
             Ok(components) => components,
             Err(_) => return,
         };
-        if let Some(ref rest) = self.rest {
-            if rest.send_v2(ch, &components, None).await.is_err() {
-                return;
-            }
+        if let Some(ref rest) = self.rest
+            && rest.send_v2(ch, &components, None).await.is_err()
+        {
+            return;
         }
         if let Some(ref hook) = self.activity_hook {
             hook(&text, false);
@@ -1195,11 +1192,10 @@ where
                     messages_done = true;
                 }
                 _ = ticker.tick() => {
-                    if let Ok(Some(cur)) = self.store.get(&item.id) {
-                        if cur.cancel {
+                    if let Ok(Some(cur)) = self.store.get(&item.id)
+                        && cur.cancel {
                             break None;
                         }
-                    }
                 }
             }
         };
@@ -1379,11 +1375,11 @@ where
         match (self.deliver)(part.clone()).await {
             Ok(msg_id) if !msg_id.trim().is_empty() => {
                 self.store.ack(&part.id, part.part, &msg_id)?;
-                if let Ok(Some(row)) = self.store.get(&part.id) {
-                    if row.state == "sent" {
-                        self.remove_reaction(&part.channel, &part.id, "👀").await;
-                        self.add_reaction(&part.channel, &part.id, "✅").await;
-                    }
+                if let Ok(Some(row)) = self.store.get(&part.id)
+                    && row.state == "sent"
+                {
+                    self.remove_reaction(&part.channel, &part.id, "👀").await;
+                    self.add_reaction(&part.channel, &part.id, "✅").await;
                 }
             }
             _ => {
@@ -1727,14 +1723,14 @@ pub async fn run(config_path: &Path) -> Result<(), String> {
             {
                 return Err("stored component document has no components".to_string());
             }
-            if part.part == 0 {
-                if let Some(ref token) = part.interaction_token {
-                    let app_id = part.app_id.as_deref().unwrap_or("");
-                    return rest
-                        .edit_original_stored_document(app_id, token, &document)
-                        .await
-                        .map_err(|error| error.to_string());
-                }
+            if part.part == 0
+                && let Some(ref token) = part.interaction_token
+            {
+                let app_id = part.app_id.as_deref().unwrap_or("");
+                return rest
+                    .edit_original_stored_document(app_id, token, &document)
+                    .await
+                    .map_err(|error| error.to_string());
             }
             let ch: u64 = part
                 .channel
@@ -2226,14 +2222,13 @@ pub async fn run(config_path: &Path) -> Result<(), String> {
                                 continue;
                             }
                         }
-                        if let Some(twilight_model::application::interaction::InteractionData::ModalSubmit(modal)) = &interaction.data {
-                            if modal.custom_id.starts_with("ask:") {
+                        if let Some(twilight_model::application::interaction::InteractionData::ModalSubmit(modal)) = &interaction.data
+                            && modal.custom_id.starts_with("ask:") {
                                 let raw = serde_json::to_value(&modal.components).unwrap_or(Value::Null);
                                 let typed = find_value(&raw, "note");
                                 crate::channels::discord::command_dispatch::ask_press(&ctx, &modal.custom_id, &[], typed.as_deref()).await;
                                 continue;
                             }
-                        }
                         let autocomplete_cmd = match &interaction.data {
                             Some(twilight_model::application::interaction::InteractionData::ApplicationCommand(cmd)) => {
                                 (is_autocomplete && matches!(cmd.name.as_str(), "run" | "skills"))
@@ -2464,14 +2459,13 @@ fn acquire_host_lock(dir: &Path, role: &str, config_path: &Path) -> Result<std::
         .map_err(|e| format!("cannot open host lock: {e}"))?
     else {
         let rec_path = dir.join(format!("{role}.json"));
-        if let Ok(body) = std::fs::read_to_string(&rec_path) {
-            if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                if let Some(pid) = v.get("pid").and_then(Value::as_u64) {
-                    return Err(format!(
-                        "Another {role} gateway is already running (pid {pid})"
-                    ));
-                }
-            }
+        if let Ok(body) = std::fs::read_to_string(&rec_path)
+            && let Ok(v) = serde_json::from_str::<Value>(&body)
+            && let Some(pid) = v.get("pid").and_then(Value::as_u64)
+        {
+            return Err(format!(
+                "Another {role} gateway is already running (pid {pid})"
+            ));
         }
         return Err(format!("Another {role} gateway is already running"));
     };

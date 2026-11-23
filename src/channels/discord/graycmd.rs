@@ -870,23 +870,23 @@ fn text_components(ctx: &Ctx<'_>, text: &str) -> Vec<Value> {
             &text,
             crate::channels::discord::pager::PAGE_LIMIT,
         );
-        if pages.len() > 1 {
-            if let Ok(token) = crate::channels::discord::pager::mint(
+        if pages.len() > 1
+            && let Ok(token) = crate::channels::discord::pager::mint(
                 ctx.store,
                 ctx.user_id,
                 ctx.channel_id,
                 &pages,
                 "",
                 crate::channels::discord::render::QUIET_ACCENT,
-            ) {
-                return crate::channels::discord::pager::components(
-                    &pages,
-                    0,
-                    &token,
-                    "",
-                    crate::channels::discord::render::QUIET_ACCENT,
-                );
-            }
+            )
+        {
+            return crate::channels::discord::pager::components(
+                &pages,
+                0,
+                &token,
+                "",
+                crate::channels::discord::render::QUIET_ACCENT,
+            );
         }
     }
     crate::channels::discord::render::text_message(&text)

@@ -11,6 +11,7 @@ pub mod service;
 pub mod session;
 pub mod setup;
 pub mod sidecar;
+#[allow(clippy::module_inception)]
 pub mod signal;
 pub mod store;
 pub use crate::channels::common::stt;

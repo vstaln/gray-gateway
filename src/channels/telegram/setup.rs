@@ -1043,10 +1043,10 @@ fn shellexpand_home(raw: &str) -> String {
         if let Some(home) = std::env::var_os("HOME") {
             return Path::new(&home).to_string_lossy().into_owned();
         }
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return format!("{}/{rest}", Path::new(&home).to_string_lossy());
-        }
+    } else if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return format!("{}/{rest}", Path::new(&home).to_string_lossy());
     }
     raw.to_string()
 }

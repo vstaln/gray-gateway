@@ -91,12 +91,11 @@ pub fn command_home(
     conversation: &str,
     scope: Scope,
 ) -> PathBuf {
-    if scope == Scope::Global {
-        if let Some(home) = config.get("gray_home").and_then(Value::as_str) {
-            if !home.is_empty() {
-                return PathBuf::from(home);
-            }
-        }
+    if scope == Scope::Global
+        && let Some(home) = config.get("gray_home").and_then(Value::as_str)
+        && !home.is_empty()
+    {
+        return PathBuf::from(home);
     }
     crate::channels::slack::session::conversation_home(config_path, conversation)
 }
@@ -127,10 +126,10 @@ impl Cache {
     pub async fn names(&self, gray_bin: &Path, home: &Path) -> HashMap<String, Cmd> {
         {
             let guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(cached) = guard.as_ref() {
-                if cached.fetched.elapsed() < LIST_TTL {
-                    return cached.names.clone();
-                }
+            if let Some(cached) = guard.as_ref()
+                && cached.fetched.elapsed() < LIST_TTL
+            {
+                return cached.names.clone();
             }
         }
         let names = list(gray_bin, home).await.unwrap_or_else(static_names);

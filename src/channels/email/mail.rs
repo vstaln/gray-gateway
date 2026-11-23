@@ -192,15 +192,15 @@ pub async fn connect(config: &Value) -> Result<Inbox, String> {
         .await
         .map_err(|(e, _)| format!("IMAP login failed: {}", wire(e)))?;
     // 163/NetEase require RFC 2971 ID after LOGIN; only when advertised.
-    if let Ok(caps) = session.capabilities().await {
-        if caps.has_str("ID") {
-            let _ = session
-                .id([
-                    ("name", Some("gray-email")),
-                    ("version", Some(env!("CARGO_PKG_VERSION"))),
-                ])
-                .await;
-        }
+    if let Ok(caps) = session.capabilities().await
+        && caps.has_str("ID")
+    {
+        let _ = session
+            .id([
+                ("name", Some("gray-email")),
+                ("version", Some(env!("CARGO_PKG_VERSION"))),
+            ])
+            .await;
     }
     let mbox = session
         .select("INBOX")
@@ -664,47 +664,47 @@ fn inline(text: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         let rest = &text[i..];
-        if let Some(after) = rest.strip_prefix("**") {
-            if let Some(end) = after.find("**") {
-                out.push_str("<strong>");
-                out.push_str(&inline(&after[..end]));
-                out.push_str("</strong>");
-                i += 4 + end;
+        if let Some(after) = rest.strip_prefix("**")
+            && let Some(end) = after.find("**")
+        {
+            out.push_str("<strong>");
+            out.push_str(&inline(&after[..end]));
+            out.push_str("</strong>");
+            i += 4 + end;
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix('`')
+            && let Some(end) = after.find('`')
+        {
+            out.push_str("<code>");
+            out.push_str(&esc(&after[..end]));
+            out.push_str("</code>");
+            i += 2 + end;
+            continue;
+        }
+        if rest.starts_with('[')
+            && let Some(close) = rest.find("](")
+            && let Some(open) = rest[close + 2..].find(')')
+        {
+            let label = &rest[1..close];
+            let url = &rest[close + 2..close + 2 + open];
+            if url.starts_with("http://") || url.starts_with("https://") {
+                out.push_str(&format!("<a href=\"{}\">{}</a>", esc(url), esc(label)));
+                i += close + 3 + open;
                 continue;
             }
         }
-        if let Some(after) = rest.strip_prefix('`') {
-            if let Some(end) = after.find('`') {
-                out.push_str("<code>");
-                out.push_str(&esc(&after[..end]));
-                out.push_str("</code>");
-                i += 2 + end;
-                continue;
-            }
-        }
-        if rest.starts_with('[') {
-            if let Some(close) = rest.find("](") {
-                if let Some(open) = rest[close + 2..].find(')') {
-                    let label = &rest[1..close];
-                    let url = &rest[close + 2..close + 2 + open];
-                    if url.starts_with("http://") || url.starts_with("https://") {
-                        out.push_str(&format!("<a href=\"{}\">{}</a>", esc(url), esc(label)));
-                        i += close + 3 + open;
-                        continue;
-                    }
-                }
-            }
-        }
-        if rest.starts_with('*') && rest.len() > 2 && rest.as_bytes()[1] != b'*' {
-            if let Some(end) = rest[1..].find('*') {
-                if end > 0 {
-                    out.push_str("<em>");
-                    out.push_str(&esc(&rest[1..1 + end]));
-                    out.push_str("</em>");
-                    i += 2 + end;
-                    continue;
-                }
-            }
+        if rest.starts_with('*')
+            && rest.len() > 2
+            && rest.as_bytes()[1] != b'*'
+            && let Some(end) = rest[1..].find('*')
+            && end > 0
+        {
+            out.push_str("<em>");
+            out.push_str(&esc(&rest[1..1 + end]));
+            out.push_str("</em>");
+            i += 2 + end;
+            continue;
         }
         out.push_str(&esc(&rest[..rest.chars().next().unwrap().len_utf8()]));
         i += rest.chars().next().unwrap().len_utf8();

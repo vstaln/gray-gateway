@@ -87,13 +87,11 @@ async fn send_markdown(
     if crate::channels::telegram::render::needs_rich_message(markdown)
         && rest.rich_supported()
         && markdown.len() <= crate::channels::telegram::transport::MAX_MESSAGE_LEN
-    {
-        if let Ok(v) = rest
+        && let Ok(v) = rest
             .send_rich_message_in(chat_id, thread_id, markdown)
             .await
-        {
-            return Ok(v);
-        }
+    {
+        return Ok(v);
     }
     let chunks = crate::channels::telegram::render::split_markdown(
         markdown,
@@ -171,42 +169,42 @@ fn inbound(update: &Value, bot_username: &str, bot_id: &str) -> Option<Inbound> 
             files.push((id.to_string(), "photo.jpg".to_string()));
         }
     }
-    if let Some(doc) = msg.get("document") {
-        if let Some(id) = doc.get("file_id").and_then(Value::as_str) {
-            let name = doc
-                .get("file_name")
-                .and_then(Value::as_str)
-                .unwrap_or("file")
-                .to_string();
-            files.push((id.to_string(), name));
-        }
+    if let Some(doc) = msg.get("document")
+        && let Some(id) = doc.get("file_id").and_then(Value::as_str)
+    {
+        let name = doc
+            .get("file_name")
+            .and_then(Value::as_str)
+            .unwrap_or("file")
+            .to_string();
+        files.push((id.to_string(), name));
     }
-    if let Some(voice) = msg.get("voice") {
-        if let Some(id) = voice.get("file_id").and_then(Value::as_str) {
-            let dur = voice.get("duration").and_then(Value::as_u64).unwrap_or(0);
-            files.push((id.to_string(), "voice.ogg".to_string()));
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(&format!("[voice: {dur}s]"));
+    if let Some(voice) = msg.get("voice")
+        && let Some(id) = voice.get("file_id").and_then(Value::as_str)
+    {
+        let dur = voice.get("duration").and_then(Value::as_u64).unwrap_or(0);
+        files.push((id.to_string(), "voice.ogg".to_string()));
+        if !text.is_empty() {
+            text.push('\n');
         }
+        text.push_str(&format!("[voice: {dur}s]"));
     }
-    if let Some(audio) = msg.get("audio") {
-        if let Some(id) = audio.get("file_id").and_then(Value::as_str) {
-            let dur = audio.get("duration").and_then(Value::as_u64).unwrap_or(0);
-            let name = audio
-                .get("file_name")
-                .and_then(Value::as_str)
-                .unwrap_or("audio.mp3")
-                .to_string();
-            let title = audio.get("title").and_then(Value::as_str).unwrap_or("");
-            let perf = audio.get("performer").and_then(Value::as_str).unwrap_or("");
-            files.push((id.to_string(), name));
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(&format!("[audio: {perf} - {title} ({dur}s)]"));
+    if let Some(audio) = msg.get("audio")
+        && let Some(id) = audio.get("file_id").and_then(Value::as_str)
+    {
+        let dur = audio.get("duration").and_then(Value::as_u64).unwrap_or(0);
+        let name = audio
+            .get("file_name")
+            .and_then(Value::as_str)
+            .unwrap_or("audio.mp3")
+            .to_string();
+        let title = audio.get("title").and_then(Value::as_str).unwrap_or("");
+        let perf = audio.get("performer").and_then(Value::as_str).unwrap_or("");
+        files.push((id.to_string(), name));
+        if !text.is_empty() {
+            text.push('\n');
         }
+        text.push_str(&format!("[audio: {perf} - {title} ({dur}s)]"));
     }
     if let Some(sticker) = msg.get("sticker") {
         let emoji = sticker.get("emoji").and_then(Value::as_str).unwrap_or("");
@@ -222,10 +220,11 @@ fn inbound(update: &Value, bot_username: &str, bot_id: &str) -> Option<Inbound> 
             .get("is_video")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if !is_anim && !is_vid {
-            if let Some(id) = sticker.get("file_id").and_then(Value::as_str) {
-                files.push((id.to_string(), "sticker.webp".to_string()));
-            }
+        if !is_anim
+            && !is_vid
+            && let Some(id) = sticker.get("file_id").and_then(Value::as_str)
+        {
+            files.push((id.to_string(), "sticker.webp".to_string()));
         }
         if !text.is_empty() {
             text.push('\n');
@@ -487,11 +486,10 @@ impl<R, D> Runtime<R, D> {
                 res = &mut run_fut => break Some(res),
                 _ = ticker.tick() => {
                     self.report_progress(&item.channel).await;
-                    if let Ok(Some(cur)) = self.store.get(&item.id) {
-                        if cur.cancel {
+                    if let Ok(Some(cur)) = self.store.get(&item.id)
+                        && cur.cancel {
                             break None;
                         }
-                    }
                 }
             }
         };
@@ -766,16 +764,15 @@ pub async fn run(config_path: &Path) -> Result<(), String> {
             .and_then(Value::as_str)
             .unwrap_or("gray"),
     );
-    if crate::channels::telegram::lifecycle::enabled(&config) {
-        if let Some(notice) =
+    if crate::channels::telegram::lifecycle::enabled(&config)
+        && let Some(notice) =
             crate::channels::telegram::lifecycle::boot_via(&gray_bin, &dir, running_before).await
-        {
-            let home = config.get("chat_id").and_then(Value::as_str).unwrap_or("");
-            if !home.is_empty() {
-                let _ = rest
-                    .send_text(home, &crate::channels::telegram::text::escape_html(&notice))
-                    .await;
-            }
+    {
+        let home = config.get("chat_id").and_then(Value::as_str).unwrap_or("");
+        if !home.is_empty() {
+            let _ = rest
+                .send_text(home, &crate::channels::telegram::text::escape_html(&notice))
+                .await;
         }
     }
 
@@ -1550,14 +1547,13 @@ fn acquire_host_lock(dir: &Path, role: &str, config_path: &Path) -> Result<std::
         .map_err(|e| format!("cannot open host lock: {e}"))?
     else {
         let rec_path = dir.join(format!("{role}.json"));
-        if let Ok(body) = std::fs::read_to_string(&rec_path) {
-            if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                if let Some(pid) = v.get("pid").and_then(Value::as_u64) {
-                    return Err(format!(
-                        "Another {role} gateway is already running (pid {pid})"
-                    ));
-                }
-            }
+        if let Ok(body) = std::fs::read_to_string(&rec_path)
+            && let Ok(v) = serde_json::from_str::<Value>(&body)
+            && let Some(pid) = v.get("pid").and_then(Value::as_u64)
+        {
+            return Err(format!(
+                "Another {role} gateway is already running (pid {pid})"
+            ));
         }
         return Err(format!("Another {role} gateway is already running"));
     };

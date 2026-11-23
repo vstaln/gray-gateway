@@ -40,10 +40,10 @@ pub fn random_bytes(bytes: &mut [u8]) {
     #[cfg(unix)]
     {
         use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            if f.read_exact(bytes).is_ok() {
-                return;
-            }
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom")
+            && f.read_exact(bytes).is_ok()
+        {
+            return;
         }
     }
     use std::hash::{BuildHasher, Hasher};

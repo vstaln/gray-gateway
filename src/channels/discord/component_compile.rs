@@ -1271,10 +1271,10 @@ mod tests {
             }
             if let Some(items) = value.get("items").and_then(Value::as_array) {
                 for item in items {
-                    if let Some(media) = item.get("media") {
-                        if let Some(url) = media.get("url") {
-                            let _ = url;
-                        }
+                    if let Some(media) = item.get("media")
+                        && let Some(url) = media.get("url")
+                    {
+                        let _ = url;
                     }
                 }
             }

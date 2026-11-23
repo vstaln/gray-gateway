@@ -564,10 +564,10 @@ async fn on_line(daemon: &Daemon, tx: &mpsc::Sender<Out>, own_nick: &mut String,
         // Track forced nick changes so addressing stays exact.
         "NICK" => {
             let old = crate::channels::irc::irc::extract_nick(&msg.prefix);
-            if old.eq_ignore_ascii_case(own_nick) {
-                if let Some(new) = msg.params.first() {
-                    *own_nick = new.clone();
-                }
+            if old.eq_ignore_ascii_case(own_nick)
+                && let Some(new) = msg.params.first()
+            {
+                *own_nick = new.clone();
             }
         }
         "ERROR" => {

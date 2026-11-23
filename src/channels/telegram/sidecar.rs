@@ -223,10 +223,10 @@ async fn send_text(params: &Value, config_path: &Path) -> Value {
                 .await;
         }
     }
-    if !media.is_empty() {
-        if let Err(error) = upload(&rest, &chat, &media).await {
-            return error;
-        }
+    if !media.is_empty()
+        && let Err(error) = upload(&rest, &chat, &media).await
+    {
+        return error;
     }
     let files = if media.is_empty() {
         String::new()

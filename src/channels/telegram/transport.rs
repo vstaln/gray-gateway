@@ -182,18 +182,15 @@ impl Rest {
             .get("https://dns.google/resolve?name=api.telegram.org&type=A")
             .send()
             .await
+            && let Ok(body) = resp.json::<Value>().await
+            && let Some(ans) = body.get("Answer").and_then(Value::as_array)
         {
-            if let Ok(body) = resp.json::<Value>().await {
-                if let Some(ans) = body.get("Answer").and_then(Value::as_array) {
-                    for row in ans {
-                        if let Some(ip_str) = row.get("data").and_then(Value::as_str) {
-                            if !SEED_FALLBACK_IPS.contains(&ip_str) {
-                                if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
-                                    self.clients.push(build_client(Some(ip), None));
-                                }
-                            }
-                        }
-                    }
+            for row in ans {
+                if let Some(ip_str) = row.get("data").and_then(Value::as_str)
+                    && !SEED_FALLBACK_IPS.contains(&ip_str)
+                    && let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>()
+                {
+                    self.clients.push(build_client(Some(ip), None));
                 }
             }
         }
@@ -664,12 +661,12 @@ impl Rest {
                 .map_err(|_| TransportError::Invalid("cannot read file".into()))?;
             let attach = format!("file{idx}");
             let mut item = json!({"type": kind, "media": format!("attach://{attach}")});
-            if idx == 0 {
-                if let Some(cap) = caption.filter(|c| !c.trim().is_empty()) {
-                    let clipped: String = cap.chars().take(MAX_CAPTION_LEN).collect();
-                    item["caption"] = json!(clipped);
-                    item["parse_mode"] = json!("HTML");
-                }
+            if idx == 0
+                && let Some(cap) = caption.filter(|c| !c.trim().is_empty())
+            {
+                let clipped: String = cap.chars().take(MAX_CAPTION_LEN).collect();
+                item["caption"] = json!(clipped);
+                item["parse_mode"] = json!("HTML");
             }
             media.push(item);
             files.push((attach, name, bytes));
@@ -825,12 +822,12 @@ impl Rest {
                     .text("chat_id", chat_id.to_string())
                     .part(field.to_string(), part);
                 if parse {
-                    if let Some(caption) = caption.filter(|c| !c.trim().is_empty()) {
-                        if caption.chars().count() <= MAX_CAPTION_LEN {
-                            form = form
-                                .text("caption", caption.to_string())
-                                .text("parse_mode", "HTML".to_string());
-                        }
+                    if let Some(caption) = caption.filter(|c| !c.trim().is_empty())
+                        && caption.chars().count() <= MAX_CAPTION_LEN
+                    {
+                        form = form
+                            .text("caption", caption.to_string())
+                            .text("parse_mode", "HTML".to_string());
                     }
                 } else if let Some(caption) = caption.filter(|c| !c.trim().is_empty()) {
                     let clipped: String = caption.chars().take(MAX_CAPTION_LEN).collect();

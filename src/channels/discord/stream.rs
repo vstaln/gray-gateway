@@ -725,10 +725,10 @@ impl Timeline {
                 pager: None,
             });
         }
-        if out.len() > k || cards.len() > k {
-            if let Some(last) = out.last_mut() {
-                last.components.extend(extras);
-            }
+        if (out.len() > k || cards.len() > k)
+            && let Some(last) = out.last_mut()
+        {
+            last.components.extend(extras);
         }
         out
     }

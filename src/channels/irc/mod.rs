@@ -4,6 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod doctor;
 pub mod gateway;
+#[allow(clippy::module_inception)]
 pub mod irc;
 pub mod lifecycle;
 pub mod pairing;

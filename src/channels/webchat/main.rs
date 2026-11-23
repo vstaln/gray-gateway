@@ -108,10 +108,10 @@ fn http_conn(mut s: TcpStream, sh: Arc<Mutex<Shared>>, cv: Arc<std::sync::Condva
     let path = parts.next().unwrap_or("/").to_string();
     let mut clen = 0usize;
     for l in head.lines().skip(1) {
-        if let Some((k, v)) = l.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                clen = v.trim().parse().unwrap_or(0).min(1024 * 1024);
-            }
+        if let Some((k, v)) = l.split_once(':')
+            && k.trim().eq_ignore_ascii_case("content-length")
+        {
+            clen = v.trim().parse().unwrap_or(0).min(1024 * 1024);
         }
     }
     while buf.len() < head_end + clen {
@@ -276,22 +276,22 @@ pub fn serve() -> std::io::Result<()> {
             None => {}
             Some(id) => {
                 // string ids = our own host/run replies
-                if let Some(sid) = id.as_str() {
-                    if sid.starts_with("wc-") {
-                        if let Some(res) = v.get("result") {
-                            fulfill_waiters(&sh, sid, res);
-                        } else if let Some(e) = v.get("error") {
-                            append_log(
-                                &sh,
-                                "sys",
-                                format!(
-                                    "host/run failed: {} (grant host.turn: `gray plugin capabilities webchat --all`)",
-                                    e["message"].as_str().unwrap_or("?")
-                                ),
-                            );
-                        }
-                        continue;
+                if let Some(sid) = id.as_str()
+                    && sid.starts_with("wc-")
+                {
+                    if let Some(res) = v.get("result") {
+                        fulfill_waiters(&sh, sid, res);
+                    } else if let Some(e) = v.get("error") {
+                        append_log(
+                            &sh,
+                            "sys",
+                            format!(
+                                "host/run failed: {} (grant host.turn: `gray plugin capabilities webchat --all`)",
+                                e["message"].as_str().unwrap_or("?")
+                            ),
+                        );
                     }
+                    continue;
                 }
                 let reply = if method == "plugin/manifest" {
                     json!({"id": id, "result": manifest()})

@@ -92,7 +92,7 @@ fn without_echo<T>(read: impl FnOnce() -> T) -> T {
     type Handle = *mut c_void;
     const STD_INPUT_HANDLE: Dword = -10i32 as Dword;
     const ENABLE_ECHO_INPUT: Dword = 0x0004;
-    extern "system" {
+    unsafe extern "system" {
         fn GetStdHandle(which: Dword) -> Handle;
         fn GetConsoleMode(handle: Handle, mode: *mut Dword) -> Bool;
         fn SetConsoleMode(handle: Handle, mode: Dword) -> Bool;
@@ -194,10 +194,10 @@ fn absolutize(path: &Path) -> std::path::PathBuf {
 }
 
 fn shellexpand_home(v: &str) -> String {
-    if let Some(rest) = v.strip_prefix("~/") {
-        if let Some(h) = crate::channels::ntfy::config::user_home() {
-            return h.join(rest).to_string_lossy().into_owned();
-        }
+    if let Some(rest) = v.strip_prefix("~/")
+        && let Some(h) = crate::channels::ntfy::config::user_home()
+    {
+        return h.join(rest).to_string_lossy().into_owned();
     }
     v.to_string()
 }

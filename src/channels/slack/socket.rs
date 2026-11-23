@@ -82,10 +82,10 @@ impl Link {
                         Ok(v) => v,
                         Err(_) => continue,
                     };
-                    if let Some(id) = env.get("envelope_id").and_then(Value::as_str) {
-                        if self.ack(id).await.is_err() {
-                            return Frame::Disconnected("ack failed".to_string());
-                        }
+                    if let Some(id) = env.get("envelope_id").and_then(Value::as_str)
+                        && self.ack(id).await.is_err()
+                    {
+                        return Frame::Disconnected("ack failed".to_string());
                     }
                     match env.get("type").and_then(Value::as_str) {
                         Some("events_api") => {

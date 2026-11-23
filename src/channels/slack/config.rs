@@ -14,9 +14,6 @@ pub fn default_path() -> PathBuf {
     home.join(".config/gray-slack/config.json")
 }
 
-/// Write JSON (pretty + trailing newline) atomically: parents 0700,
-/// temp file + rename, replacement mode 0600.
-
 /// A Slack id: a letter prefix followed by uppercase alphanumerics
 /// (U…/W… users, C…/D…/G… channels, T… teams, B… bots, F… files).
 pub fn slack_id(v: &Value) -> bool {
@@ -64,10 +61,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     if !data.get("channel_id").is_some_and(channel_id) {
         return Err("channel_id must be a Slack channel ID".to_string());
     }
-    if let Some(owner) = data.get("owner_id") {
-        if !user_id(owner) {
-            return Err("owner_id must be a Slack member ID".to_string());
-        }
+    if let Some(owner) = data.get("owner_id")
+        && !user_id(owner)
+    {
+        return Err("owner_id must be a Slack member ID".to_string());
     }
     for (key, check) in [
         ("allowed_users", user_id as fn(&Value) -> bool),
@@ -80,10 +77,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
             }
         }
     }
-    if let Some(bot) = data.get("bot_user_id") {
-        if !slack_id(bot) {
-            return Err("bot_user_id must be a Slack ID".to_string());
-        }
+    if let Some(bot) = data.get("bot_user_id")
+        && !slack_id(bot)
+    {
+        return Err("bot_user_id must be a Slack ID".to_string());
     }
     for key in ["gray_bin", "gray_home", "workdir"] {
         let ok = data
@@ -104,10 +101,10 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
         if !policy.is_object() {
             return Err("session_reset must be an object".to_string());
         }
-        if let Some(mode) = policy.get("mode").and_then(Value::as_str) {
-            if !["none", "idle", "daily", "both"].contains(&mode) {
-                return Err("session_reset.mode must be none, idle, daily or both".to_string());
-            }
+        if let Some(mode) = policy.get("mode").and_then(Value::as_str)
+            && !["none", "idle", "daily", "both"].contains(&mode)
+        {
+            return Err("session_reset.mode must be none, idle, daily or both".to_string());
         }
     }
     Ok(())

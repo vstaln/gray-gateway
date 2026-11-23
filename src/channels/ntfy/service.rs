@@ -717,10 +717,10 @@ pub fn uninstall_with(sup: Supervisor, config_path: &Path) -> Result<String, Str
             // A stale unit file the manager never loaded can't be
             // disabled — remove it anyway or a failed install can never
             // be cleaned up.
-            if let Err(e) = systemd_run(&["disable", "--now", NAME]) {
-                if !matches!(unit_load_state(), UnitLoad::NotFound) {
-                    return Err(e);
-                }
+            if let Err(e) = systemd_run(&["disable", "--now", NAME])
+                && !matches!(unit_load_state(), UnitLoad::NotFound)
+            {
+                return Err(e);
             }
             let _ = std::fs::remove_file(&target);
             let _ = systemd_run(&["daemon-reload"]);

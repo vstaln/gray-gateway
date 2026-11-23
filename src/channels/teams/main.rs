@@ -4,7 +4,6 @@
 //! Inbound needs a Bot Framework registration — README notes the gap.
 
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
 
 const NAME: &str = "teams";
 
