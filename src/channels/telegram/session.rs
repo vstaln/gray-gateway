@@ -1,0 +1,210 @@
+//! Telegram conversation identity and session reset policy.
+//!
+//! A Telegram chat is already a separate session — the chat id keys the
+//! conversation. Group chats additionally use a per-user key, so members of
+//! one group cannot read each other's transcript through the agent; private
+//! chats stay keyed by their one-to-one chat id.
+
+use chrono::{DateTime, Local, TimeZone, Timelike};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResetReason {
+    /// A pre-policy session had no activity timestamp. It is reset once when
+    /// an enabled policy first sees it, then follows the normal policy.
+    Legacy,
+    Idle,
+    Daily,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResetPolicy {
+    pub mode: String,
+    pub idle_minutes: u64,
+    pub at_hour: u32,
+}
+
+impl Default for ResetPolicy {
+    fn default() -> Self {
+        Self {
+            mode: "both".into(),
+            idle_minutes: 1_440,
+            at_hour: 4,
+        }
+    }
+}
+
+impl ResetPolicy {
+    pub fn from_config(config: &Value) -> Self {
+        let raw = config.get("session_reset");
+        let mut out = Self::default();
+        if let Some(policy) = raw {
+            if let Some(mode) = policy.get("mode").and_then(Value::as_str) {
+                out.mode = mode.to_string();
+            }
+            if let Some(minutes) = policy.get("idle_minutes").and_then(Value::as_u64) {
+                out.idle_minutes = minutes;
+            }
+            if let Some(hour) = policy.get("at_hour").and_then(Value::as_u64) {
+                out.at_hour = hour as u32;
+            }
+        }
+        out
+    }
+
+    /// Whether the current private home should start fresh before this turn.
+    pub fn reset_reason(&self, state: &Value, has_session: bool, now: f64) -> Option<ResetReason> {
+        if self.mode == "none" || !has_session {
+            return None;
+        }
+        let Some(last) = state.get("last_activity").and_then(Value::as_f64) else {
+            return Some(ResetReason::Legacy);
+        };
+        if matches!(self.mode.as_str(), "idle" | "both")
+            && (now - last).max(0.0) >= self.idle_minutes.saturating_mul(60) as f64
+        {
+            return Some(ResetReason::Idle);
+        }
+        if matches!(self.mode.as_str(), "daily" | "both") && self.daily_boundary_passed(last, now) {
+            return Some(ResetReason::Daily);
+        }
+        None
+    }
+
+    fn daily_boundary_passed(&self, last: f64, now: f64) -> bool {
+        let Some(now_local) = local_at(now) else {
+            return false;
+        };
+        let Some(last_local) = local_at(last) else {
+            return false;
+        };
+        let today = now_local.date_naive();
+        let boundary_date = if now_local.hour() >= self.at_hour {
+            today
+        } else {
+            today - chrono::Duration::days(1)
+        };
+        let Some(boundary) = boundary_date.and_hms_opt(self.at_hour, 0, 0) else {
+            return false;
+        };
+        last_local.naive_local() < boundary
+    }
+}
+
+fn local_at(timestamp: f64) -> Option<DateTime<Local>> {
+    if !timestamp.is_finite() || timestamp < i64::MIN as f64 || timestamp > i64::MAX as f64 {
+        return None;
+    }
+    Local
+        .timestamp_opt(timestamp as i64, 0)
+        .single()
+        .or_else(|| Local.timestamp_opt(timestamp as i64, 0).earliest())
+}
+
+/// Build the session key for one inbound message.
+///
+/// `chat_id` is the Telegram chat the message arrived in. Group chats add
+/// the sender id so one chat cannot merge every member into one transcript.
+pub fn conversation_key(chat_id: &str, user_id: &str, is_private: bool) -> String {
+    if is_private || user_id.trim().is_empty() {
+        format!("chat:{chat_id}")
+    } else {
+        format!("chat:{chat_id}:user:{user_id}")
+    }
+}
+
+pub fn private_conversation(conversation: &str) -> bool {
+    !conversation.contains(":user:")
+}
+
+/// Forget the transcript in one private conversation home and leave a fresh
+/// generation marker behind. The marker prevents a turn that was already in
+/// flight during `/new` from restoring its old session pointer when it exits.
+pub fn reset_home(home: &Path, now: f64) -> Result<(), String> {
+    let sessions = home.join("sessions");
+    let mut transcripts = Vec::new();
+    if sessions.is_dir() {
+        collect_transcripts(&sessions, &mut transcripts)?;
+    }
+    if !transcripts.is_empty() {
+        let archive = archive_dir(&home.join("sessions-archive"), now)?;
+        for path in transcripts {
+            let rel = path
+                .strip_prefix(&sessions)
+                .map_err(|_| "cannot archive conversation session".to_string())?;
+            let target = archive.join(rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|_| "cannot archive conversation session".to_string())?;
+            }
+            move_file(&path, &target)?;
+        }
+    }
+    let state = json!({
+        "generation": crate::channels::telegram::durable::uuid_hex(),
+        "last_activity": now
+    });
+    crate::channels::telegram::config::atomic_json(&home.join("session.json"), &state)
+}
+
+fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|_| "cannot list conversation sessions".to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "cannot list conversation sessions".to_string())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "cannot inspect conversation session".to_string())?;
+        if file_type.is_dir() {
+            collect_transcripts(&path, out)?;
+        } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn archive_dir(root: &Path, now: f64) -> Result<PathBuf, String> {
+    let stamp = local_at(now)
+        .map(|t| t.format("%Y%m%d-%H%M%S").to_string())
+        .unwrap_or_else(|| (now as i64).to_string());
+    std::fs::create_dir_all(root).map_err(|_| "cannot create session archive".to_string())?;
+    let mut name = stamp.clone();
+    let mut n = 2;
+    loop {
+        let dir = root.join(&name);
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                name = format!("{stamp}-{n}");
+                n += 1;
+            }
+            Err(_) => return Err("cannot create session archive".to_string()),
+        }
+    }
+}
+
+fn move_file(from: &Path, to: &Path) -> Result<(), String> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to).map_err(|_| "cannot archive conversation session".to_string())?;
+    std::fs::remove_file(from).map_err(|_| "cannot archive conversation session".to_string())
+}
+
+/// True when the on-disk state still belongs to the same conversation
+/// generation. A reset advances this value while the old child is running.
+pub fn generation_is_current(state_path: &Path, generation: &str) -> bool {
+    std::fs::read(state_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|state| {
+            state
+                .get("generation")
+                .and_then(Value::as_str)
+                .map(|current| current == generation)
+        })
+        .unwrap_or(false)
+}

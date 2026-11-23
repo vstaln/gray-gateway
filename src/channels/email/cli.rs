@@ -1,0 +1,434 @@
+//! CLI tree: `gray-email --config <path> <subcommand>`.
+use clap::{Parser, Subcommand};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+
+/// Standalone email (IMAP/SMTP) transport and setup for gray.
+#[derive(Debug, Parser)]
+#[command(name = "gray-email", bin_name = "gray email")]
+pub struct Cli {
+    /// Config file path.
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+impl Cli {
+    pub fn config_path(&self) -> PathBuf {
+        match &self.config {
+            Some(p) => p.clone(),
+            None => crate::channels::email::config::default_path(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Interactive setup: account address and password, IMAP and SMTP
+    /// endpoints checked live; allowlist collected; home address chosen.
+    Setup,
+    Run,
+    Sidecar {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        args: Vec<String>,
+    },
+    /// Print the plugin manifest (what `gray plugin install email` reads).
+    #[command(hide = true)]
+    Manifest,
+    Register,
+    Install,
+    Status,
+    Stop,
+    Restart,
+    Doctor,
+    Uninstall,
+    Limits {
+        #[arg(long)]
+        timeout_seconds: Option<u64>,
+        #[arg(long)]
+        concurrency: Option<u64>,
+        #[arg(long)]
+        max_requests: Option<u64>,
+    },
+    Queue {
+        #[command(subcommand)]
+        action: QueueAction,
+    },
+    Allowlist {
+        #[command(subcommand)]
+        action: AllowlistAction,
+    },
+    Pairing {
+        #[command(subcommand)]
+        action: PairingAction,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum QueueAction {
+    List,
+    Cancel { id: String },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AllowlistAction {
+    Add { addr: String },
+    Remove { addr: String },
+    List,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PairingAction {
+    /// Approve a code the bot mailed an unconfigured sender: that address
+    /// joins the allowlist.
+    Approve {
+        /// Platform the code was issued for. Only `email` exists.
+        platform: String,
+        /// The code from the bot's reply.
+        code: String,
+    },
+}
+
+/// Register the outgoing `email_*` tools in gray's plugin lock.
+/// Matches `gray_plugin::lock::LockEntry` (explicit argv, no fake install).
+pub fn register(config: &Value, config_path: &Path) -> Result<(), String> {
+    let gray_home = config
+        .get("gray_home")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let lock = Path::new(gray_home).join("plugins/lock.json");
+    let mut data: Value = std::fs::read(&lock)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| json!({"schema": 1, "plugins": {}}));
+    if data.get("schema").and_then(Value::as_u64) != Some(1)
+        || !data.get("plugins").is_some_and(Value::is_object)
+    {
+        return Err("Unsupported gray plugin lock; not changing it".to_string());
+    }
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|_| "cannot locate plugin binary".to_string())?;
+    let resolved = config_path
+        .to_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| config_path.to_string_lossy().into_owned());
+    let argv = vec![
+        Value::String(exe.clone()),
+        Value::String("email".to_string()),
+        Value::String("sidecar".to_string()),
+        Value::String("--config".to_string()),
+        Value::String(resolved),
+    ];
+    let prev_exe = data
+        .pointer("/plugins/email/argv/0")
+        .and_then(Value::as_str);
+    if prev_exe.is_some_and(|p| p != exe && Path::new(p).is_file()) {
+        return Err("Another email plugin is registered; refusing to overwrite it".to_string());
+    }
+    let installed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default();
+    // Merge into any existing row: gray keeps cli_argv and the consent
+    // record in the same lock entry, so replacing the object would drop them.
+    let entry = &mut data["plugins"]["email"];
+    if !entry.is_object() {
+        *entry = json!({});
+    }
+    entry["ecosystem"] = json!("gray-native");
+    entry["version"] = json!(env!("CARGO_PKG_VERSION"));
+    entry["source"] = json!("https://github.com/vstaln/gray-email");
+    entry["argv"] = Value::Array(argv);
+    entry["adapter_version"] = json!("1.1");
+    entry["installed_at"] = json!(installed_at);
+    if entry.get("hash").is_none() {
+        entry["hash"] = json!("");
+    }
+    if entry.get("scope").is_none() {
+        entry["scope"] = json!("user");
+    }
+    if entry.get("enabled").is_none() {
+        entry["enabled"] = json!(true);
+    }
+    // Re-register heals a row whose CLI binary moved (reinstall, cargo
+    // install to a new prefix); a working custom cli_argv is kept.
+    let cli_ok = entry
+        .get("cli_argv")
+        .and_then(|a| a.get(0))
+        .and_then(Value::as_str)
+        .is_some_and(|p| Path::new(p).is_file());
+    if !cli_ok {
+        entry["cli_argv"] = json!([exe]);
+    }
+    crate::channels::email::config::atomic_json(&lock, &data)
+}
+
+/// Parse the service-install answer: default yes.
+pub fn install_confirmed(answer: &str) -> bool {
+    matches!(answer.trim().to_lowercase().as_str(), "" | "y" | "yes")
+}
+
+fn limits(
+    config_path: &Path,
+    t: Option<u64>,
+    c: Option<u64>,
+    m: Option<u64>,
+) -> Result<(), String> {
+    let mut config = crate::channels::email::config::load_config(config_path)?;
+    if let Some(v) = t {
+        config["timeout_seconds"] = json!(v);
+    }
+    if let Some(v) = c {
+        config["concurrency"] = json!(v);
+    }
+    if let Some(v) = m {
+        config["max_requests"] = json!(v);
+    }
+    crate::channels::email::config::save_config(config_path, &config)?;
+    println!("Limits saved; restart the gateway to apply.");
+    Ok(())
+}
+
+fn queue(action: &QueueAction, config_path: &Path) -> Result<(), String> {
+    let store = crate::channels::email::gateway::open_store(config_path)?;
+    match action {
+        QueueAction::List => {
+            let items = store.items()?;
+            if items.is_empty() {
+                println!("queue empty");
+            }
+            for i in items {
+                let text: String = i.text.chars().take(24).collect();
+                println!(
+                    "{} [{}] {} {} ({}…)",
+                    i.id, i.state, i.target, i.sender, text
+                );
+            }
+            Ok(())
+        }
+        QueueAction::Cancel { id } => {
+            if store.cancel(id)? {
+                println!("cancelled {id}");
+                Ok(())
+            } else {
+                Err(format!("{id}: not queued (running or unknown)"))
+            }
+        }
+    }
+}
+
+fn allowlist(action: &AllowlistAction, config_path: &Path) -> Result<(), String> {
+    let mut config = crate::channels::email::config::load_config(config_path)?;
+    let mut allowed: Vec<String> = config
+        .get("allowed_senders")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    match action {
+        AllowlistAction::Add { addr } => {
+            if !crate::channels::email::config::addr_valid(&Value::String(addr.clone())) {
+                return Err("addresses look like alice@example.com".to_string());
+            }
+            if !allowed.iter().any(|u| u.eq_ignore_ascii_case(addr)) {
+                allowed.push(addr.clone());
+            }
+            config["allowed_senders"] =
+                Value::Array(allowed.into_iter().map(Value::String).collect());
+            crate::channels::email::config::save_config(config_path, &config)?;
+            println!("{addr} allowed; restart the gateway to apply.");
+            Ok(())
+        }
+        AllowlistAction::Remove { addr } => {
+            allowed.retain(|u| !u.eq_ignore_ascii_case(addr));
+            config["allowed_senders"] =
+                Value::Array(allowed.into_iter().map(Value::String).collect());
+            crate::channels::email::config::save_config(config_path, &config)?;
+            println!("{addr} removed; restart the gateway to apply.");
+            Ok(())
+        }
+        AllowlistAction::List => {
+            for u in &allowed {
+                println!("{u}");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Dispatch a parsed subcommand.
+pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
+    match cmd {
+        Command::Sidecar { args } => {
+            if args.is_empty() {
+                crate::channels::email::sidecar::serve(config_path)
+            } else {
+                let argv = std::iter::once("gray-email".to_string()).chain(args.iter().cloned());
+                let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
+                let cfg = cli.config.unwrap_or_else(|| config_path.to_path_buf());
+                run(&cli.command, &cfg)
+            }
+        }
+        Command::Manifest => {
+            use clap::CommandFactory;
+            let mut m = crate::channels::email::sidecar::MANIFEST.clone();
+            m["completion"] = Cli::command()
+                .get_subcommands()
+                .filter(|c| {
+                    !c.is_hide_set() && !["run", "sidecar", "register"].contains(&c.get_name())
+                })
+                .map(
+                    |c| json!({"arg": c.get_name(), "description": verb_description(c.get_name())}),
+                )
+                .collect();
+            m["sidecar_args"] = serde_json::json!(["sidecar"]);
+            println!("{m}");
+            Ok(())
+        }
+        Command::Register => {
+            let config: Value = crate::channels::email::config::load_config(config_path)?;
+            register(&config, config_path)
+        }
+        Command::Setup => {
+            use crate::channels::email::setup::Prompter;
+            let mut io = crate::channels::email::setup::Tty;
+            // setup is async; drive it on a throwaway current-thread runtime
+            // so `run` stays sync like the other CLI arms.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "cannot start setup runtime".to_string())?;
+            let done = rt.block_on(crate::channels::email::setup::run(config_path, &mut io))?;
+            if done {
+                let config: Value = crate::channels::email::config::load_config(config_path)?;
+                register(&config, config_path)?;
+                println!("Outgoing tools registered with gray.");
+                if crate::channels::email::service::installed(config_path) {
+                    // A reconfigured bot takes effect now.
+                    println!("{}", crate::channels::email::service::restart(config_path)?);
+                    return Ok(());
+                }
+                let answer = io.prompt("Enable and start the background service now? [Y/n] ")?;
+                if install_confirmed(&answer) {
+                    let line = crate::channels::email::service::install(config_path)?;
+                    println!("{line}");
+                    println!("Run gray email status to check it.");
+                    if matches!(
+                        crate::channels::email::service::detect(),
+                        crate::channels::email::service::Supervisor::SystemdUser { .. }
+                    ) {
+                        println!("For operation after logout: loginctl enable-linger \"$USER\"");
+                    }
+                } else {
+                    println!(
+                        "Run gray email install when ready, or gray email run in the foreground."
+                    );
+                }
+            }
+            Ok(())
+        }
+        Command::Run => {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "cannot start gateway runtime".to_string())?;
+            rt.block_on(crate::channels::email::gateway::run(config_path))
+        }
+        Command::Status => {
+            println!("{}", crate::channels::email::service::status(config_path)?);
+            Ok(())
+        }
+        Command::Stop => {
+            println!("{}", crate::channels::email::service::stop(config_path)?);
+            Ok(())
+        }
+        Command::Restart => {
+            println!("{}", crate::channels::email::service::restart(config_path)?);
+            Ok(())
+        }
+        Command::Uninstall => {
+            let line = crate::channels::email::service::uninstall(config_path)?;
+            println!("{line}");
+            println!(
+                "Service removed. Private configuration and sessions retained; registered outgoing tools retained."
+            );
+            Ok(())
+        }
+        Command::Install => {
+            let line = crate::channels::email::service::install(config_path)?;
+            println!("{line}");
+            if matches!(
+                crate::channels::email::service::detect(),
+                crate::channels::email::service::Supervisor::SystemdUser { .. }
+            ) {
+                println!("To survive logout, enable user linger: loginctl enable-linger \"$USER\"");
+            }
+            Ok(())
+        }
+        Command::Doctor => {
+            let config = crate::channels::email::config::load_config(config_path)?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "cannot start runtime".to_string())?;
+            rt.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(90),
+                    crate::channels::email::doctor::doctor(&config),
+                )
+                .await
+                .map_err(|_| "doctor timed out after 90s".to_string())?
+            })
+        }
+        Command::Limits {
+            timeout_seconds,
+            concurrency,
+            max_requests,
+        } => limits(config_path, *timeout_seconds, *concurrency, *max_requests),
+        Command::Queue { action } => queue(action, config_path),
+        Command::Allowlist { action } => allowlist(action, config_path),
+        Command::Pairing { action } => match action {
+            PairingAction::Approve { platform, code } => {
+                println!(
+                    "{}",
+                    crate::channels::email::pairing::approve(config_path, platform, code)?
+                );
+                Ok(())
+            }
+        },
+    }
+}
+
+fn verb_description(verb: &str) -> &'static str {
+    match verb {
+        "setup" => "connect the app: credentials, owner, home chat",
+        "install" => "install and start the background service",
+        "status" => "is the transport running",
+        "stop" => "stop the background service",
+        "restart" => "restart the background service",
+        "doctor" => "diagnose a broken setup",
+        "uninstall" => "remove the service, keep the config",
+        "limits" => "timeouts, concurrency and request caps",
+        "queue" => "inspect or drop queued sends",
+        "allowlist" => "who may talk to the bot",
+        "pairing" => "approve a direct-message pairing",
+        _ => "",
+    }
+}
+
+/// `gray-gateway email <args…>`: this channel's former CLI, parsed the way
+/// the standalone binary parsed it.
+pub fn run_email(argv: &[String]) -> Result<(), String> {
+    let cli =
+        Cli::try_parse_from(std::iter::once("gray-email".to_string()).chain(argv.iter().cloned()))
+            .map_err(|e| e.to_string())?;
+    let path = cli.config_path();
+    let path = std::path::absolute(&path).unwrap_or(path);
+    run(&cli.command, &path)
+}

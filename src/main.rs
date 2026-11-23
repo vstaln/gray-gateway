@@ -1,3 +1,4 @@
+mod channels;
 mod cron;
 mod cron_cli;
 mod cron_digest;
@@ -6,6 +7,7 @@ mod cron_serve;
 mod cron_status;
 mod cron_tool;
 mod gateway;
+mod parts;
 mod redact;
 mod session;
 mod sidecar;
@@ -227,12 +229,17 @@ struct Cli {
     cmd: GatewayCmd,
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    let parts = parts::Parts::load("gateway", channels::PARTS);
+    if let Some(name) = argv.first().map(String::as_str)
+        && channels::is_part(name)
+    {
+        return channels::run_cli(name, &argv[1..], parts.on(name));
+    }
     match argv.first().map(String::as_str) {
         Some("manifest") => {
-            println!("{}", sidecar::manifest());
+            println!("{}", sidecar::manifest(&parts));
             return Ok(());
         }
         Some("sidecar") | None => {
@@ -242,19 +249,27 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(2);
             }
             env_logger::init();
-            return sidecar::run().await;
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            return rt.block_on(sidecar::run(&parts));
         }
         _ => {}
     }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     let cli = Cli::try_parse_from(std::iter::once("gray-gateway".to_string()).chain(argv.clone()));
     let cli = match cli {
         Ok(c) => c,
         Err(e) => e.exit(),
     };
     env_logger::init();
-    match cli.cmd {
-        GatewayCmd::Cron(cmd) => cron_cli::run_cron(cmd).await,
-        GatewayCmd::Session(cmd) => session::run(cmd).await,
-        cmd => gateway::run_cli(cmd).await,
-    }
+    rt.block_on(async {
+        match cli.cmd {
+            GatewayCmd::Cron(cmd) => cron_cli::run_cron(cmd).await,
+            GatewayCmd::Session(cmd) => session::run(cmd).await,
+            cmd => gateway::run_cli(cmd).await,
+        }
+    })
 }
