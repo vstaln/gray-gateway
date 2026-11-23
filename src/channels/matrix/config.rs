@@ -98,7 +98,9 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     match data.get("allowed_users").and_then(Value::as_array) {
         Some(a) if a.iter().all(user_id_valid) => {}
         _ => {
-            return Err("allowed_users must be an array of Matrix user IDs (@u:server)".to_string());
+            return Err(
+                "allowed_users must be an array of Matrix user IDs (@u:server)".to_string(),
+            );
         }
     }
     if let Some(home) = data.get("home_room") {

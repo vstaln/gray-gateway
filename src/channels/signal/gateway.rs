@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-pub use crate::channels::common::config::{atomic_json, config_dir_of as config_dir};
+pub use crate::channels::common::config::config_dir_of as config_dir;
 use crate::channels::signal::runner::{RunError, failure_notice};
 use crate::channels::signal::signal::{Rpc, Target, TransportError};
 use crate::channels::signal::store::Store;

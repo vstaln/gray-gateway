@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
-pub use crate::channels::common::config::{atomic_json, config_dir_of as config_dir};
+pub use crate::channels::common::config::config_dir_of as config_dir;
 use crate::channels::irc::irc::{Conn, Message, Writer};
 use crate::channels::irc::runner::RunError;
 use crate::channels::irc::store::Store;

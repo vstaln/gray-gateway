@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use crate::channels::common::config::{atomic_json, config_dir_of as config_dir};
+pub use crate::channels::common::config::config_dir_of as config_dir;
 use crate::channels::email::mail::{Inbox, OutMail};
 use crate::channels::email::runner::RunError;
 use crate::channels::email::store::Store;

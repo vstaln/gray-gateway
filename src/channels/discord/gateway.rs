@@ -2,7 +2,6 @@
 //!
 //! Discord gateway loop.
 
-pub use crate::channels::common::config::atomic_json;
 use crate::channels::discord::component_input::{
     NormalizedInteraction, normalize, normalize_autocomplete,
 };

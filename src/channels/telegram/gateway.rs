@@ -4,7 +4,6 @@
 //! and the inbox row id (`tg:<update_id>`) dedupes that replay. There is no
 //! webhook — `deleteWebhook` at boot keeps a stale one from eating updates.
 
-pub use crate::channels::common::config::atomic_json;
 use crate::channels::telegram::durable::{OutboxPart, Store};
 use crate::channels::telegram::runner::{RunError, RunInput};
 use crate::channels::telegram::stream::{Finish, LiveView, Outcome};

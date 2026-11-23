@@ -27,3 +27,6 @@ pub mod text;
 pub mod transport;
 
 pub mod main;
+
+#[cfg(all(test, unix))]
+mod e2e_mock;

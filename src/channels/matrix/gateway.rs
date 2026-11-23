@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use crate::channels::common::config::{atomic_json, config_dir_of as config_dir};
+pub use crate::channels::common::config::config_dir_of as config_dir;
 use crate::channels::matrix::matrix::{Rest, TransportError};
 use crate::channels::matrix::runner::RunError;
 use crate::channels::matrix::store::Store;
