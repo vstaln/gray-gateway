@@ -98,6 +98,26 @@ pub const PARTS: &[Part] = &[
         default: false,
         description: "Mattermost REST channel",
     },
+    Part {
+        name: "send-message",
+        default: false,
+        description: "queue /tell messages for the next turn",
+    },
+    Part {
+        name: "webhooks",
+        default: false,
+        description: "local HTTP webhooks that start turns",
+    },
+    Part {
+        name: "file-trigger",
+        default: false,
+        description: "per-path reminders appended to write results",
+    },
+    Part {
+        name: "control",
+        default: false,
+        description: "unix-socket remote control and send_to_session",
+    },
 ];
 
 fn channel_manifest(name: &str) -> Value {
@@ -117,6 +137,7 @@ fn channel_manifest(name: &str) -> Value {
         "gchat" => gchat::main::manifest(),
         "mastodon" => mastodon::main::manifest(),
         "mattermost" => mattermost::main::manifest(),
+        _ if crate::inbound::is_part(name) => crate::inbound::part_manifest(name),
         _ => Value::Null,
     }
 }
@@ -220,6 +241,11 @@ pub fn manifest(parts: &Parts) -> Value {
             "pause", "resume", "inbox", "cron", "session", "reset-policy",
         ],
     });
+    if let Some(obj) = command_descriptions.as_object_mut() {
+        for (name, description) in crate::inbound::command_descriptions(parts) {
+            obj.insert(name.to_string(), json!(description));
+        }
+    }
     if !hooks.is_empty() {
         out["hooks"] = json!(hooks);
     }
@@ -261,7 +287,7 @@ pub fn command_owner(parts: &Parts, command: &str) -> Option<&'static str> {
 }
 
 pub fn is_part(name: &str) -> bool {
-    PARTS.iter().any(|p| p.name == name)
+    PARTS.iter().any(|p| p.name == name) && !crate::inbound::is_part(name)
 }
 
 pub async fn call_tool(parts: &Parts, params: &Value) -> Option<Value> {
@@ -330,7 +356,10 @@ fn json_error(message: &str) -> Value {
 }
 
 pub fn adopt_services(parts: &Parts) {
-    for part in PARTS.iter().filter(|p| parts.on(p.name)) {
+    for part in PARTS
+        .iter()
+        .filter(|p| parts.on(p.name) && !crate::inbound::is_part(p.name))
+    {
         for path in common::service_migrate::adopt(part.name) {
             eprintln!(
                 "{}: repointed at {} {}",

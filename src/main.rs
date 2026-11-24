@@ -7,6 +7,7 @@ mod cron_serve;
 mod cron_status;
 mod cron_tool;
 mod gateway;
+mod inbound;
 mod parts;
 mod redact;
 mod session;

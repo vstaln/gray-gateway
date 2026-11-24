@@ -20,11 +20,11 @@ The sidecar (NDJSON on stdio, spawned bare) exposes the `schedule` tool —
 the in-agent interface to the job store — and a `/cron` command. The
 daemon, the cron ticker, the schedule tool and `/cron` are always on.
 
-## Chat channels are parts
+## Channels and inbound sources are parts
 
-The fifteen chat channels that used to be separate plugins now live here as
-**parts**. Every part is off by default, so a gateway install carries only
-the channels you ask for:
+The fifteen chat channels and the four inbound sources that used to be
+separate plugins now live here as **parts**. Every part is off by default, so
+a gateway install carries only the parts you ask for:
 
 ```sh
 gray plugin install gateway --parts telegram,discord   # at install time
@@ -59,6 +59,18 @@ the telegram channel is off, so its service will not start —
 | `gchat` | Google Chat webhook |
 | `mastodon` | Mastodon post, timeline, notifications |
 | `mattermost` | Mattermost REST |
+| `send-message` | queue `/tell` messages for the next turn |
+| `webhooks` | local HTTP webhooks that start turns |
+| `file-trigger` | per-path reminders appended to write results |
+| `control` | remote-control socket and `send_to_session` |
+
+The four inbound parts run inside the gateway sidecar rather than as a
+separate `inbound` process. Their state, config and socket paths are
+unchanged — `$GRAY_HOME/send-message/`, `$GRAY_HOME/webhooks/`,
+`$GRAY_HOME/file-trigger/`, `$GRAY_HOME/control/<sid>.sock` — and so are
+their commands (`/tell`, `/webhook`, `/trigger`, `/control`) and tools
+(`webhook_emit`, `send_to_session`). `/inbound` is gone; `gray gateway
+manifest` lists the parts.
 
 Tool names do not change when a channel becomes a part: `telegram_send`,
 `telegram_file`, `discord_send`, `discord_send_ui`, `discord_open_modal`,
@@ -120,6 +132,11 @@ pid files next to its config; the smaller channels keep
   claims the name; a `command/run` for `/telegram` (or the `telegram`
   subcommand) is routed the same way. `prompt/context` concatenates the
   context blocks of every enabled channel that asks for the hook.
+- `agent/before_start`, `tool/before` and `tool/after` are fanned out to the
+  enabled inbound parts, whose `{text}` blocks are joined with blank lines;
+  a part that has nothing to say contributes `{}`. `webhook_emit`,
+  `send_to_session`, `/tell`, `/webhook`, `/trigger` and `/control` are
+  handled by the same copy.
 
 ## Layout
 
@@ -128,6 +145,7 @@ src/main.rs          gateway CLI (daemon, cron, session, channel subcommands)
 src/sidecar.rs       the one sidecar loop: gateway tools + enabled channels
 src/parts.rs         parts.json loading (off unless enabled)
 src/channels/mod.rs  the part table, merged manifest, tool/command routing
+src/inbound/         the four inbound parts and their shared wire
 src/channels/common/ code shared by every channel: busy, stt, config helpers
 src/channels/<part>/ one former plugin each, internals unchanged
 ```

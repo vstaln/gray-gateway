@@ -190,19 +190,21 @@ impl Drop for CronTicker {
 pub async fn run(parts: &crate::parts::Parts) -> anyhow::Result<()> {
     crate::channels::adopt_services(parts);
     let _cron_ticker = CronTicker::start();
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let wire = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
+    let inbound = crate::inbound::install(parts, wire.clone());
+    let inbound_tx = inbound.as_ref().map(|w| w.sender());
+    use tokio::io::AsyncReadExt;
     let stdin = tokio::io::stdin();
     let mut reader = tokio::io::BufReader::new(stdin);
     let mut buf = [0u8; 8192];
     let mut pending: Vec<u8> = Vec::new();
     let mut skipping = false;
-    let mut out = tokio::io::stdout();
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
             if !skipping && !pending.is_empty() {
                 let line = String::from_utf8_lossy(&pending).trim().to_string();
-                if !line.is_empty() && !dispatch(parts, &line, &mut out).await? {
+                if !line.is_empty() && !dispatch(parts, &line, &wire, inbound_tx.as_ref()).await? {
                     return Ok(());
                 }
             }
@@ -226,9 +228,7 @@ pub async fn run(parts: &crate::parts::Parts) -> anyhow::Result<()> {
                         pending.clear();
                         rest = &rest[i + 1..];
                         let frame = json!({"id": null, "error": {"code": -32600, "message": "request line exceeds 1 MiB; dropped"}});
-                        out.write_all(frame.to_string().as_bytes()).await?;
-                        out.write_all(b"\n").await?;
-                        out.flush().await?;
+                        crate::inbound::write_frame(&wire, &frame);
                         continue;
                     }
                     pending.extend_from_slice(&rest[..i]);
@@ -238,7 +238,8 @@ pub async fn run(parts: &crate::parts::Parts) -> anyhow::Result<()> {
                     if line.is_empty() {
                         continue;
                     }
-                    if !dispatch(parts, &line, &mut out).await? {
+                    if !dispatch(parts, &line, &wire, inbound_tx.as_ref()).await? {
+                        crate::inbound::shutdown();
                         return Ok(());
                     }
                 }
@@ -248,37 +249,36 @@ pub async fn run(parts: &crate::parts::Parts) -> anyhow::Result<()> {
                         pending.clear();
                         skipping = true;
                         let frame = json!({"id": null, "error": {"code": -32600, "message": "request line exceeds 1 MiB; dropped"}});
-                        out.write_all(frame.to_string().as_bytes()).await?;
-                        out.write_all(b"\n").await?;
-                        out.flush().await?;
+                        crate::inbound::write_frame(&wire, &frame);
                     }
                     break;
                 }
             }
         }
     }
+    crate::inbound::shutdown();
     Ok(())
 }
 
 async fn dispatch(
     parts: &crate::parts::Parts,
     line: &str,
-    out: &mut tokio::io::Stdout,
+    wire: &std::sync::Arc<std::sync::Mutex<std::io::Stdout>>,
+    inbound: Option<&std::sync::mpsc::Sender<Value>>,
 ) -> anyhow::Result<bool> {
-    use tokio::io::AsyncWriteExt;
     let Ok(req) = serde_json::from_str::<Value>(line) else {
         return Ok(true);
     };
+    if req.get("method").is_none() && crate::inbound::route_reply(&req) {
+        return Ok(true);
+    }
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let id = req.get("id").cloned();
     let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
     let reply = match (method, id) {
         ("plugin/shutdown", _) => {
             if let Some(id) = req.get("id") {
-                let frame = json!({"id": id, "result": {}});
-                out.write_all(frame.to_string().as_bytes()).await?;
-                out.write_all(b"\n").await?;
-                out.flush().await?;
+                crate::inbound::write_frame(wire, &json!({"id": id, "result": {}}));
             }
             return Ok(false);
         }
@@ -291,6 +291,46 @@ async fn dispatch(
             Some(text) => json!({"id": id, "result": {"text": text}}),
             None => json!({"id": id, "result": {"text": ""}}),
         }),
+        ("agent/before_start", Some(_)) if crate::inbound::owns_hook(parts, method) => {
+            let Some(tx) = inbound else {
+                return Ok(true);
+            };
+            let _ = tx.send(req.clone());
+            None
+        }
+        ("tool/before", Some(_)) | ("tool/after", Some(_))
+            if crate::inbound::owns_hook(parts, method) =>
+        {
+            let Some(tx) = inbound else {
+                return Ok(true);
+            };
+            let _ = tx.send(req.clone());
+            None
+        }
+        ("tool/call", Some(_))
+            if crate::inbound::owns_tool(
+                parts,
+                params.get("name").and_then(Value::as_str).unwrap_or(""),
+            ) =>
+        {
+            let Some(tx) = inbound else {
+                return Ok(true);
+            };
+            let _ = tx.send(req.clone());
+            None
+        }
+        ("command/run", Some(_))
+            if crate::inbound::owns_command(
+                parts,
+                params.get("name").and_then(Value::as_str).unwrap_or(""),
+            ) =>
+        {
+            let Some(tx) = inbound else {
+                return Ok(true);
+            };
+            let _ = tx.send(req.clone());
+            None
+        }
         ("tool/call", Some(id)) => {
             let reply = match tool_call(parts, &params) {
                 v if v.get("channel_tool").is_some() => crate::channels::call_tool(parts, &params)
@@ -322,9 +362,7 @@ async fn dispatch(
         }
     };
     if let Some(frame) = reply {
-        out.write_all(frame.to_string().as_bytes()).await?;
-        out.write_all(b"\n").await?;
-        out.flush().await?;
+        crate::inbound::write_frame(wire, &frame);
     }
     Ok(true)
 }
