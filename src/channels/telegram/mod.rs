@@ -1,0 +1,32 @@
+pub mod activity;
+pub mod attachments;
+pub mod budget;
+pub mod capabilities;
+pub mod cli;
+pub mod commands;
+pub mod config;
+pub mod doctor;
+pub mod durable;
+pub mod gateway;
+pub mod graycmd;
+pub mod lifecycle;
+pub mod media_tags;
+pub mod pairing;
+pub mod policy;
+pub mod ratelimit;
+pub mod render;
+pub mod runner;
+pub mod service;
+pub mod session;
+pub mod setup;
+pub mod sidecar;
+pub mod stream;
+pub use crate::channels::common::stt;
+pub mod telegram_check;
+pub mod text;
+pub mod transport;
+
+pub mod main;
+
+#[cfg(all(test, unix))]
+mod e2e_mock;

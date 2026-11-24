@@ -1,26 +1,10 @@
 use serde_json::{Value, json};
 
-pub fn manifest() -> Value {
-    json!({
-        "name": "gateway",
-        "version": env!("CARGO_PKG_VERSION"),
-        "protocol": "1.3",
-        "tools": [crate::cron_tool::tool_def()],
-        "commands": ["/cron", "/gateway"],
-        "turn_local": {"/gateway": ["*"], "/cron": ["*"]},
-        // spawned at session start so the cron ticker runs while a REPL is
-        // open — no `gray-gateway run` daemon needed for reminders/wakes
-        "autostart": true,
-        "requires_plugins": ["memory"],
-        "completion": [
-            "setup", "run", "status", "start", "stop", "restart", "install",
-            "uninstall", "on", "off", "lifecycle", "send", "wake", "activity",
-            "pause", "resume", "inbox", "cron", "session",
-        ],
-    })
+pub fn manifest(parts: &crate::parts::Parts) -> Value {
+    crate::channels::manifest(parts)
 }
 
-fn tool_call(params: &Value) -> Value {
+fn tool_call(parts: &crate::parts::Parts, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("args").cloned().unwrap_or_else(|| json!({}));
     let session_id = params
@@ -28,7 +12,10 @@ fn tool_call(params: &Value) -> Value {
         .and_then(|s| s.get("id"))
         .and_then(Value::as_str);
     if name != "schedule" {
-        return json!({"content": format!("unknown tool {name:?}"), "is_error": true});
+        return match crate::channels::tool_owner(parts, name) {
+            Some(_) => json!({"channel_tool": name}),
+            None => json!({"content": format!("unknown tool {name:?}"), "is_error": true}),
+        };
     }
     let home = match crate::vendor::gray_home() {
         Ok(h) => h,
@@ -40,7 +27,7 @@ fn tool_call(params: &Value) -> Value {
     }
 }
 
-fn command_run(params: &Value) -> Value {
+fn command_run(_parts: &crate::parts::Parts, params: &Value) -> Value {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -92,6 +79,18 @@ fn gateway_command(argv: &[String]) -> Value {
     match argv.first().map(String::as_str) {
         Some("on") => json!({"text": crate::gateway::toggle(true)}),
         Some("off") => json!({"text": crate::gateway::toggle(false)}),
+        Some("reset-policy") => {
+            let result = if argv.len() == 1 {
+                crate::vendor::gray_home()
+                    .and_then(|home| crate::gateway::settings::ResetPolicy::display(&home))
+            } else {
+                Ok(
+                    "To edit locally, use `gray gateway reset-policy <none|idle|daily|both>`."
+                        .into(),
+                )
+            };
+            json!({"text": result.unwrap_or_else(|err| format!("{err:#}"))})
+        }
         _ => match crate::vendor::gray_home() {
             Ok(home) => {
                 let (_, lines) = crate::gateway::report(&home);
@@ -188,7 +187,8 @@ impl Drop for CronTicker {
     }
 }
 
-pub async fn run() -> anyhow::Result<()> {
+pub async fn run(parts: &crate::parts::Parts) -> anyhow::Result<()> {
+    crate::channels::adopt_services(parts);
     let _cron_ticker = CronTicker::start();
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let stdin = tokio::io::stdin();
@@ -202,7 +202,7 @@ pub async fn run() -> anyhow::Result<()> {
         if n == 0 {
             if !skipping && !pending.is_empty() {
                 let line = String::from_utf8_lossy(&pending).trim().to_string();
-                if !line.is_empty() && !dispatch(&line, &mut out).await? {
+                if !line.is_empty() && !dispatch(parts, &line, &mut out).await? {
                     return Ok(());
                 }
             }
@@ -238,7 +238,7 @@ pub async fn run() -> anyhow::Result<()> {
                     if line.is_empty() {
                         continue;
                     }
-                    if !dispatch(&line, &mut out).await? {
+                    if !dispatch(parts, &line, &mut out).await? {
                         return Ok(());
                     }
                 }
@@ -260,7 +260,11 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn dispatch(line: &str, out: &mut tokio::io::Stdout) -> anyhow::Result<bool> {
+async fn dispatch(
+    parts: &crate::parts::Parts,
+    line: &str,
+    out: &mut tokio::io::Stdout,
+) -> anyhow::Result<bool> {
     use tokio::io::AsyncWriteExt;
     let Ok(req) = serde_json::from_str::<Value>(line) else {
         return Ok(true);
@@ -278,12 +282,40 @@ async fn dispatch(line: &str, out: &mut tokio::io::Stdout) -> anyhow::Result<boo
             }
             return Ok(false);
         }
-        ("plugin/manifest", Some(id)) => Some(json!({"id": id, "result": manifest()})),
+        ("plugin/manifest", Some(id)) => Some(json!({"id": id, "result": manifest(parts)})),
         ("plugin/tools", Some(id)) => {
-            Some(json!({"id": id, "result": {"tools": [crate::cron_tool::tool_def()]}}))
+            let m = manifest(parts);
+            Some(json!({"id": id, "result": {"tools": m["tools"].clone()}}))
         }
-        ("tool/call", Some(id)) => Some(json!({"id": id, "result": tool_call(&params)})),
-        ("command/run", Some(id)) => Some(json!({"id": id, "result": command_run(&params)})),
+        ("prompt/context", Some(id)) => Some(match crate::channels::prompt_context(parts) {
+            Some(text) => json!({"id": id, "result": {"text": text}}),
+            None => json!({"id": id, "result": {"text": ""}}),
+        }),
+        ("tool/call", Some(id)) => {
+            let reply = match tool_call(parts, &params) {
+                v if v.get("channel_tool").is_some() => crate::channels::call_tool(parts, &params)
+                    .await
+                    .unwrap_or_else(|| json!({"content": "unknown tool", "is_error": true})),
+                v => v,
+            };
+            Some(json!({"id": id, "result": reply}))
+        }
+        ("command/run", Some(id)) => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches('/')
+                .to_string();
+            let reply = match name.as_str() {
+                "cron" | "gateway" => command_run(parts, &params),
+                _ => match crate::channels::run_command(parts, &params).await {
+                    Some(v) => v,
+                    None => json!({"text": format!("unknown command {name:?}")}),
+                },
+            };
+            Some(json!({"id": id, "result": reply}))
+        }
         (_, None) => None,
         (_, Some(id)) => {
             Some(json!({"id": id, "error": {"code": -32601, "message": "method not found"}}))

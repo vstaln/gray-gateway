@@ -1,0 +1,1020 @@
+//! The Signal gateway: signal-cli `receive` notifications -> durable inbox
+//! -> isolated gray turns -> `send` replies back out. The daemon is a thin
+//! TCP client: signal-cli owns the Signal protocol, retries and group
+//! state; this file owns admission, queuing and turn plumbing.
+//!
+//! Envelopes arriving while the socket is down never reach us — unlike a
+//! sync cursor there is no backlog to replay. `sig:` queue ids still
+//! dedupe a redelivery within one connection, and `recover` picks up turns
+//! that were running when the process stopped.
+//!
+//! Admission mirrors the other bridges: our own account never turns; the
+//! sender's number/UUID must be on `allowed_numbers`; group messages need
+//! the group on `allowed_groups` and (with `require_mention`) a mention of
+//! the bot. An un-admitted DMer gets a pairing reply instead of silence.
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
+
+pub use crate::channels::common::config::config_dir_of as config_dir;
+use crate::channels::signal::runner::{RunError, failure_notice};
+use crate::channels::signal::signal::{Rpc, Target, TransportError};
+use crate::channels::signal::store::Store;
+
+/// The queue file next to the config.
+pub fn open_store(config_path: &Path) -> Result<Store, String> {
+    Store::new(&Store::default_path(config_path))
+}
+
+/// Reconnect backoff after a socket failure: 1s doubling to a minute.
+fn poll_backoff(attempt: u64) -> Duration {
+    let secs = (1u64 << attempt.min(6)).min(60);
+    Duration::from_secs(secs)
+}
+
+fn log_failure(what: &str, target: &str, error: &TransportError) {
+    let detail = match error {
+        TransportError::Net(detail) => format!("network: {detail}"),
+        TransportError::Rpc(detail) => format!("rpc: {detail}"),
+        TransportError::Timeout => "timed out".to_string(),
+        TransportError::Closed => "connection closed".to_string(),
+        TransportError::Invalid(detail) => format!("not sent: {detail}"),
+    };
+    eprintln!("[signal] {what} failed for {target}: {detail}");
+}
+
+struct Daemon {
+    config: Value,
+    config_path: PathBuf,
+    store: Store,
+    /// The live daemon connection; swapped wholesale on reconnect.
+    rpc: RwLock<Rpc>,
+    /// Our own number — self-sent envelopes never turn.
+    own_account: String,
+    /// Allowlisted senders (numbers or UUIDs).
+    allowed: HashSet<String>,
+    /// `group:<id>` groups that may turn; `*` admits all.
+    groups: HashSet<String>,
+    /// `group:<id>` groups that need no mention.
+    free_groups: HashSet<String>,
+    /// The chat lifecycle notices go to.
+    home_chat: String,
+    /// Observed number<->UUID pairs (both directions).
+    aliases: std::sync::RwLock<HashMap<String, String>>,
+    /// `gray cmd list` outcome, TTL'd; see commands.rs.
+    commands: std::sync::RwLock<crate::channels::signal::commands::ListCache>,
+    acks: crate::channels::signal::busy::Acks,
+    pager: crate::channels::signal::busy::Pager,
+}
+
+/// A parsed inbound message: everything `on_envelope` needs in one place.
+struct Inbound {
+    /// Number or UUID the reply goes to for a DM.
+    sender: String,
+    /// `group:<id>` for group chats, the sender for DMs.
+    target: String,
+    conversation: String,
+    /// Prompt text (message body plus quote context).
+    text: String,
+    /// `sig:` dedupe id.
+    event_id: String,
+    is_group: bool,
+    is_admitted: bool,
+    /// Raw attachment objects; fetched only after admission.
+    attachments: Vec<Value>,
+}
+
+impl Daemon {
+    /// `require_mention` config flag; default true (hermes semantics).
+    fn require_mention(&self) -> bool {
+        self.config
+            .get("require_mention")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    /// The sender may trigger the bot: their number, their UUID, or a
+    /// `uuid:`-prefixed alias is on the allowlist. Aliases learned from
+    /// envelopes carrying both forms count too.
+    fn user_admitted(&self, sender: &str) -> bool {
+        if sender.is_empty() {
+            return false;
+        }
+        let hit = |id: &str| {
+            self.allowed.contains(id)
+                || id
+                    .strip_prefix("uuid:")
+                    .is_some_and(|u| self.allowed.contains(u))
+        };
+        if hit(sender) {
+            return true;
+        }
+        self.aliases
+            .read()
+            .ok()
+            .and_then(|map| map.get(sender).cloned())
+            .is_some_and(|alias| hit(alias.as_str()))
+    }
+
+    /// A note-to-self / linked-device send: returns the `sentMessage`,
+    /// which plays the dataMessage role downstream. None for sync
+    /// envelopes that are not ours to handle.
+    fn unwrap_sync<'a>(&self, envelope: &'a Value) -> Option<&'a Value> {
+        let sent = envelope.get("syncMessage")?.get("sentMessage")?;
+        let dest = sent.get("destination").and_then(Value::as_str);
+        let group = sent.pointer("/groupInfo/groupId").is_some();
+        if dest == Some(self.own_account.as_str()) || (dest.is_none() && group) {
+            return Some(sent);
+        }
+        None
+    }
+
+    /// Learn number<->UUID pairs from envelopes that carry both, so an
+    /// allowlisted number still admits its UUID form (and vice versa).
+    fn remember_alias(&self, envelope: &Value) {
+        let number = envelope.get("sourceNumber").and_then(Value::as_str);
+        let uuid = envelope.get("sourceUuid").and_then(Value::as_str);
+        if let (Some(n), Some(u)) = (number, uuid)
+            && let Ok(mut map) = self.aliases.write()
+        {
+            map.insert(n.to_string(), u.to_string());
+            map.insert(u.to_string(), n.to_string());
+        }
+    }
+
+    /// Shape one envelope into an Inbound, or None to drop it silently.
+    fn parse(&self, envelope: &Value) -> Option<Inbound> {
+        self.remember_alias(envelope);
+        let note_to_self = envelope.get("syncMessage").is_some();
+        let sync_sent = if note_to_self {
+            Some(self.unwrap_sync(envelope)?)
+        } else {
+            None
+        };
+        let sender = envelope
+            .get("sourceNumber")
+            .or_else(|| envelope.get("sourceUuid"))
+            .or_else(|| envelope.get("source"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if sender.is_empty() {
+            return None;
+        }
+        // Our own echo never turns — except note-to-self, which is the
+        // owner talking to their own account.
+        if sender == self.own_account && !note_to_self {
+            return None;
+        }
+        if envelope.get("storyMessage").is_some() {
+            return None;
+        }
+        let data = match sync_sent {
+            Some(sent) => sent,
+            None => envelope
+                .get("dataMessage")
+                .or_else(|| envelope.pointer("/editMessage/dataMessage"))?,
+        };
+        let group_id = data
+            .pointer("/groupInfo/groupId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let is_group = group_id.is_some();
+        let target = match &group_id {
+            Some(id) => format!("group:{id}"),
+            None => sender.clone(),
+        };
+        if is_group && !self.groups.contains("*") && !self.groups.contains(&target) {
+            return None;
+        }
+        let mut text = data
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if is_group && self.require_mention() && !self.free_groups.contains(&target) {
+            let mentioned = data
+                .get("mentions")
+                .and_then(Value::as_array)
+                .map(|ms| {
+                    ms.iter().any(|m| {
+                        m.get("number").and_then(Value::as_str) == Some(&self.own_account)
+                            || m.get("uuid").and_then(Value::as_str) == Some(&self.own_account)
+                    })
+                })
+                .unwrap_or(false)
+                || text.contains(&format!("@{}", self.own_account));
+            if !mentioned {
+                return None;
+            }
+            text = text.replace(&format!("@{}", self.own_account), "");
+        }
+        let timestamp = envelope
+            .get("timestamp")
+            .and_then(Value::as_u64)
+            .or_else(|| data.get("timestamp").and_then(Value::as_u64))
+            .unwrap_or_default();
+        let attachments: Vec<Value> = data
+            .get("attachments")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(quote_text) = data.pointer("/quote/text").and_then(Value::as_str)
+            && !quote_text.trim().is_empty()
+        {
+            let author = data
+                .pointer("/quote/author")
+                .and_then(Value::as_str)
+                .unwrap_or("someone");
+            lines.push(format!("[in reply to {author}: {}]", quote_text.trim()));
+        }
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+        // A dataMessage can be an empty wrapper (key updates, deletes) —
+        // no prompt and nothing attached means no turn.
+        if lines.is_empty() && attachments.is_empty() {
+            return None;
+        }
+        let event_id = if timestamp > 0 {
+            format!("sig:{timestamp}:{sender}")
+        } else {
+            format!("sig:{}", crate::channels::signal::store::uuid_hex())
+        };
+        let conversation = crate::channels::signal::session::conversation_key(
+            group_id.as_deref().unwrap_or(""),
+            &sender,
+            !is_group,
+        );
+        Some(Inbound {
+            sender: sender.clone(),
+            is_admitted: self.user_admitted(&sender),
+            target,
+            conversation,
+            text: lines.join("\n"),
+            event_id,
+            is_group,
+            attachments,
+        })
+    }
+
+    /// Fetch one attachment into the conversation home; returns the prompt
+    /// line describing it, plus the saved path when it landed. Failures
+    /// degrade to a bracketed note, never a dropped turn. Only called for
+    /// admitted senders.
+    async fn attachment_line(
+        &self,
+        home: &Path,
+        att: &Value,
+        index: usize,
+    ) -> Option<(String, Option<PathBuf>)> {
+        let id = att.get("id").and_then(Value::as_str)?;
+        let size = att.get("size").and_then(Value::as_u64).unwrap_or(0);
+        let ctype = att
+            .get("contentType")
+            .and_then(Value::as_str)
+            .unwrap_or("file");
+        let name = att
+            .get("fileName")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("attachment-{index}"));
+        if size > crate::channels::signal::signal::MAX_ATTACHMENT_BYTES {
+            return Some((
+                format!("[attachment skipped: {name} ({ctype}) is too large]"),
+                None,
+            ));
+        }
+        let rpc = self.rpc.read().await;
+        let bytes = match rpc.get_attachment(&self.own_account, id).await {
+            Ok(b) if b.len() as u64 <= crate::channels::signal::signal::MAX_ATTACHMENT_BYTES => b,
+            Ok(_) => {
+                return Some((
+                    format!("[attachment skipped: {name} ({ctype}) is too large]"),
+                    None,
+                ));
+            }
+            Err(e) => {
+                eprintln!("[signal] attachment fetch failed: {e}");
+                return Some((format!("[attachment unavailable: {name} ({ctype})]"), None));
+            }
+        };
+        drop(rpc);
+        let dir = home.join("attachments");
+        if std::fs::create_dir_all(&dir).is_err() {
+            return Some((format!("[attachment unsaved: {name} ({ctype})]"), None));
+        }
+        let safe: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(80)
+            .collect();
+        let path = dir.join(format!(
+            "{}_{safe}",
+            crate::channels::signal::store::uuid_hex()
+        ));
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => Some((
+                format!("[attachment saved: {} ({ctype})]", path.to_string_lossy()),
+                Some(path),
+            )),
+            Err(_) => Some((format!("[attachment unsaved: {name} ({ctype})]"), None)),
+        }
+    }
+
+    /// Send markdown to a target, chunked and styled. Log-only failures.
+    async fn reply(&self, target_raw: &str, text: &str, what: &str) {
+        let Ok(target) = Target::parse(target_raw) else {
+            return;
+        };
+        let rpc = self.rpc.read().await;
+        if let Err(e) =
+            crate::channels::signal::signal::send_long(&rpc, &self.own_account, &target, text, 0)
+                .await
+        {
+            log_failure(what, target_raw, &e);
+        }
+    }
+
+    /// Is `name` a real command? The cached registry answers; a stale or
+    /// absent cache costs one `cmd list`, a dead one the static set.
+    async fn command_known(&self, name: &str, home: &Path) -> bool {
+        let now = crate::channels::signal::store::now_secs();
+        let cached = self.commands.read().ok().and_then(|c| {
+            (now - c.fetched_at < crate::channels::signal::commands::LIST_TTL_SECS)
+                .then(|| c.names.clone())
+        });
+        let names = match cached {
+            Some(names) => names,
+            None => {
+                let fetched =
+                    crate::channels::signal::commands::list_names(&self.config, home).await;
+                if let Ok(mut c) = self.commands.write() {
+                    *c = crate::channels::signal::commands::ListCache {
+                        fetched_at: now,
+                        names: fetched.as_ref().map(|f| f.0.clone()),
+                        slow: fetched.as_ref().map(|f| f.1.clone()).unwrap_or_default(),
+                    };
+                }
+                fetched.map(|f| f.0)
+            }
+        };
+        crate::channels::signal::commands::known(&names, name)
+    }
+
+    /// Whether the cached registry marks `name` slow.
+    fn command_slow(&self, name: &str) -> bool {
+        self.commands
+            .read()
+            .ok()
+            .map(|c| c.slow.contains(name))
+            .unwrap_or(false)
+    }
+
+    /// Run the message as a `!`/`/` command when it names a real one.
+    /// `Some` consumed the message; `None` passes it on to the normal
+    /// prompt path.
+    async fn command_reply(
+        &self,
+        msg: &Inbound,
+    ) -> Option<crate::channels::signal::commands::Outcome> {
+        let (name, args) = crate::channels::signal::commands::parse_prefixed(&msg.text)?;
+        let home = crate::channels::signal::session::conversation_home(
+            &self.config_path,
+            &msg.conversation,
+        );
+        if !self.command_known(&name, &home).await {
+            return None;
+        }
+        let slow = self.command_slow(&name);
+        Some(
+            crate::channels::signal::commands::run(&self.config, &home, &name, &args, slow)
+                .await
+                .unwrap_or_else(crate::channels::signal::commands::Outcome::Text),
+        )
+    }
+
+    /// One inbound envelope: admission, commands, attachments, enqueue.
+    async fn on_envelope(&self, envelope: &Value) {
+        let Some(msg) = self.parse(envelope) else {
+            return;
+        };
+        if !msg.is_admitted {
+            if !msg.is_group {
+                // Only a DM hears how to get in; group strangers get silence.
+                if let Some(reply) =
+                    crate::channels::signal::pairing::reply_for(&self.store, &msg.sender, true)
+                {
+                    self.reply(&msg.sender, &reply.text, "pairing reply").await;
+                }
+            }
+            return;
+        }
+
+        // Bare commands never reach the model.
+        if matches!(msg.text.trim(), "/new" | "/reset") {
+            let home = crate::channels::signal::session::conversation_home(
+                &self.config_path,
+                &msg.conversation,
+            );
+            let note = match crate::channels::signal::session::reset_home(
+                &home,
+                crate::channels::signal::store::now_secs(),
+            ) {
+                Ok(()) => "Session reset — the next message starts fresh.",
+                Err(_) => "Could not reset this session.",
+            };
+            self.reply(&msg.target, note, "reset reply").await;
+            return;
+        }
+
+        if let Some(args) = crate::channels::signal::busy::command(&msg.text, "voice") {
+            let argv: Vec<&str> = args.split_whitespace().collect();
+            let reply = match argv.as_slice() {
+                [] | ["provider"] => {
+                    crate::channels::signal::stt::provider(&self.config, None).await
+                }
+                ["provider", id] => {
+                    crate::channels::signal::stt::provider(&self.config, Some(id)).await
+                }
+                _ => Ok("Usage: /voice [provider [id]]".to_string()),
+            };
+            let text = match reply {
+                Ok(text) => text,
+                Err(e) => format!("Voice: {e}"),
+            };
+            self.reply(&msg.target, &text, "voice reply").await;
+            return;
+        }
+        if let Some(args) = crate::channels::signal::busy::command(&msg.text, "page") {
+            let reply = self.pager.page(
+                &msg.conversation,
+                crate::channels::signal::busy::page_number(args),
+            );
+            self.reply(&msg.target, &reply, "page reply").await;
+            return;
+        }
+        if crate::channels::signal::busy::command(&msg.text, "stop").is_some() {
+            let reply = match self.store.cancel_conversation(&msg.conversation) {
+                Ok(true) => crate::channels::signal::busy::STOPPED,
+                _ => crate::channels::signal::busy::NOTHING_RUNNING,
+            };
+            self.reply(&msg.target, reply, "stop reply").await;
+            return;
+        }
+        let steer = crate::channels::signal::busy::command(&msg.text, "steer").map(str::to_string);
+        if let Some(steer_text) = &steer {
+            if steer_text.is_empty() {
+                self.reply(
+                    &msg.target,
+                    crate::channels::signal::busy::STEER_USAGE,
+                    "steer reply",
+                )
+                .await;
+                return;
+            }
+            if crate::channels::signal::runner::steer(&msg.conversation, steer_text).await {
+                self.reply(
+                    &msg.target,
+                    crate::channels::signal::busy::STEERING,
+                    "steer reply",
+                )
+                .await;
+                return;
+            }
+        }
+
+        // Known `!`/`/` commands run through `gray cmd`; text answers
+        // inline, prompts enqueue as ordinary turns.
+        let outcome = if steer.is_none() {
+            self.command_reply(&msg).await
+        } else {
+            None
+        };
+        if let Some(outcome) = outcome {
+            match outcome {
+                crate::channels::signal::commands::Outcome::Text(reply) => {
+                    let reply = if crate::channels::signal::commands::parse_prefixed(&msg.text)
+                        .is_some_and(|(name, _)| name == "help")
+                    {
+                        format!("{reply}{}", crate::channels::signal::busy::help_suffix("/"))
+                    } else {
+                        reply
+                    };
+                    let reply = self.pager.first(&msg.conversation, &reply);
+                    self.reply(&msg.target, &reply, "command reply").await;
+                }
+                crate::channels::signal::commands::Outcome::Prompt { prompt, fallback } => {
+                    let capacity = self
+                        .config
+                        .get("queue_capacity")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(1000);
+                    let id = format!("{}:cmd", msg.event_id);
+                    match self.store.enqueue(
+                        &id,
+                        &msg.target,
+                        &msg.sender,
+                        &msg.conversation,
+                        &prompt,
+                        capacity,
+                    ) {
+                        Ok(_) => {
+                            if !fallback.trim().is_empty() {
+                                self.reply(&msg.target, fallback.trim(), "command reply")
+                                    .await;
+                            }
+                        }
+                        Err(e) => {
+                            self.reply(&msg.target, "Queue full; try again later.", "queue notice")
+                                .await;
+                            eprintln!("[signal] command turn enqueue failed: {e}");
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if steer.is_none()
+            && msg.attachments.is_empty()
+            && crate::channels::signal::busy::steer_mode(&self.config)
+            && crate::channels::signal::runner::steer(&msg.conversation, &msg.text).await
+        {
+            self.reply(
+                &msg.target,
+                crate::channels::signal::busy::STEERING,
+                "steer reply",
+            )
+            .await;
+            return;
+        }
+
+        // Attachments fetch only now: an unadmitted sender cannot make the
+        // bot touch the attachment store. Voice notes are transcribed as
+        // they land, so the model reads words instead of a file path.
+        let mut prompt = steer.clone().unwrap_or_else(|| msg.text.clone());
+        if !msg.attachments.is_empty() {
+            let home = crate::channels::signal::session::conversation_home(
+                &self.config_path,
+                &msg.conversation,
+            );
+            let mut spoken: Vec<String> = Vec::new();
+            for (i, att) in msg.attachments.iter().enumerate() {
+                let Some((line, saved)) = self.attachment_line(&home, att, i).await else {
+                    continue;
+                };
+                if let Some(path) = saved
+                    .filter(|p| crate::channels::signal::stt::is_audio(&p.to_string_lossy(), ""))
+                {
+                    match crate::channels::signal::stt::transcribe(&self.config, &path).await {
+                        Ok(text) => spoken.push(text),
+                        Err(e) => {
+                            eprintln!("[signal] voice note not transcribed: {e}");
+                            spoken.push(format!("[voice note could not be transcribed: {e}]"));
+                        }
+                    }
+                }
+                prompt = if prompt.is_empty() {
+                    line
+                } else {
+                    format!("{prompt}\n{line}")
+                };
+            }
+            if !spoken.is_empty() {
+                let block = crate::channels::signal::stt::prompt_block(&spoken);
+                prompt = if prompt.is_empty() {
+                    block
+                } else {
+                    format!("{block}\n{prompt}")
+                };
+            }
+        }
+
+        let capacity = self
+            .config
+            .get("queue_capacity")
+            .and_then(Value::as_u64)
+            .unwrap_or(1000);
+        match self.store.enqueue(
+            &msg.event_id,
+            &msg.target,
+            &msg.sender,
+            &msg.conversation,
+            &prompt,
+            capacity,
+        ) {
+            Ok(true) => {
+                eprintln!("[signal] queued {} from {}", msg.event_id, msg.sender);
+                if steer.is_some() {
+                    self.reply(
+                        &msg.target,
+                        crate::channels::signal::busy::IDLE_STEER,
+                        "steer reply",
+                    )
+                    .await;
+                } else if let Some(ack) = self.acks.queued(
+                    &msg.conversation,
+                    self.store
+                        .ahead(&msg.conversation, &msg.event_id)
+                        .unwrap_or(0),
+                    crate::channels::signal::store::now_secs(),
+                ) {
+                    self.reply(&msg.target, &ack, "queue ack").await;
+                }
+            }
+            Ok(false) => {} // redelivered envelope — already queued or done
+            Err(e) => {
+                self.reply(&msg.target, "Queue full; try again later.", "queue notice")
+                    .await;
+                eprintln!("[signal] enqueue failed: {e}");
+            }
+        }
+    }
+
+    /// One claimed inbox item end to end. A failed send re-queues; a
+    /// generated answer retries delivery instead of regenerating.
+    async fn work(&self) -> Result<bool, String> {
+        let Some(item) = self.store.claim()? else {
+            return Ok(false);
+        };
+        let Ok(target) = Target::parse(&item.target) else {
+            self.store.fail(&item.id, "unroutable target")?;
+            return Ok(true);
+        };
+        // Typing indicator is best-effort; a dead daemon must not stall
+        // the turn.
+        {
+            let rpc = self.rpc.read().await;
+            rpc.typing(&self.own_account, &target, false).await;
+        }
+        let outcome = crate::channels::signal::busy::cancellable(
+            crate::channels::signal::runner::run_gray(
+                &self.config,
+                &self.config_path,
+                &item.conversation,
+                &item.text,
+                None,
+            ),
+            || self.store.cancel_requested(&item.id).unwrap_or(false),
+        )
+        .await;
+        {
+            let rpc = self.rpc.read().await;
+            rpc.typing(&self.own_account, &target, true).await;
+        }
+        let Some(outcome) = outcome else {
+            self.store.mark_cancelled(&item.id)?;
+            return Ok(true);
+        };
+        match outcome {
+            Ok(answer) => {
+                let chunks = crate::channels::signal::text::split_signal_message(
+                    &answer,
+                    crate::channels::signal::signal::MAX_MESSAGE_CHARS,
+                );
+                let total = if chunks.len() > 8 { 2 } else { chunks.len() };
+                let mut attempts = 0u32;
+                let mut sent = 0usize;
+                'deliver: loop {
+                    {
+                        let rpc = self.rpc.read().await;
+                        match crate::channels::signal::signal::send_long(
+                            &rpc,
+                            &self.own_account,
+                            &target,
+                            &answer,
+                            sent,
+                        )
+                        .await
+                        {
+                            Ok(n) => sent = n,
+                            Err(e) if e.is_retryable() && attempts < 5 => {
+                                attempts += 1;
+                                drop(rpc);
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                continue 'deliver;
+                            }
+                            Err(e) => {
+                                log_failure("delivery", &item.target, &e);
+                                if sent == 0 {
+                                    self.store.fail(&item.id, "delivery failed")?;
+                                } else {
+                                    self.store.fail(&item.id, "delivery partially failed")?;
+                                }
+                                break 'deliver;
+                            }
+                        }
+                    }
+                    if sent >= total {
+                        self.store.complete(&item.id, &answer)?;
+                    }
+                    break 'deliver;
+                }
+            }
+            Err(RunError::Busy) => {
+                self.store
+                    .requeue_busy(&item.id, crate::channels::signal::busy::BUSY_RETRY_SECS)?;
+            }
+            Err(e) => {
+                self.reply(&item.target, &failure_notice(&e), "error reply")
+                    .await;
+                self.store.fail(&item.id, &e.to_string())?;
+            }
+        }
+        Ok(true)
+    }
+}
+
+fn string_set(config: &Value, key: &str) -> HashSet<String> {
+    config
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Normalize a configured group entry to the `group:<id>` target form.
+fn group_set(config: &Value, key: &str) -> HashSet<String> {
+    string_set(config, key)
+        .into_iter()
+        .map(|g| {
+            if g == "*" || g.starts_with("group:") {
+                g
+            } else {
+                format!("group:{g}")
+            }
+        })
+        .collect()
+}
+
+/// SIGTERM or SIGINT on unix; the console control event on Windows.
+#[cfg(unix)]
+async fn shutdown_signal() {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("SIGTERM handler");
+    let mut int = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .expect("SIGINT handler");
+    tokio::select! {
+        _ = term.recv() => {},
+        _ = int.recv() => {},
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// The daemon: lock + pidfile, workers, subscribe loop, graceful stop.
+pub async fn run(config_path: &Path) -> Result<(), String> {
+    let dir = config_dir(config_path);
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .create(&dir)
+        .map_err(|_| "cannot create config directory".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+
+    // daemon.json: `status` and lifecycle read it; removed on every exit.
+    let pid_path = dir.join("daemon.json");
+    {
+        let stamp = serde_json::json!({
+            "pid": std::process::id(),
+            "started_at": crate::channels::signal::store::now_secs()
+        });
+        let _ = crate::channels::signal::config::atomic_json(&pid_path, &stamp);
+    }
+    struct RemovePid(PathBuf);
+    impl Drop for RemovePid {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _remove_pid = RemovePid(pid_path);
+
+    // One daemon per config: two would fight over the same subscription.
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("gateway.lock"))
+        .map_err(|_| "cannot open gateway lock".to_string())?;
+    match lock_file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err("Another gateway is running".to_string());
+        }
+        Err(_) => return Err("cannot lock gateway".to_string()),
+    }
+    let _lock = lock_file;
+
+    let config = crate::channels::signal::config::load_config(config_path)?;
+    let own_account =
+        crate::channels::signal::signal::account(&config).ok_or("signal account is missing")?;
+    let store = open_store(config_path)?;
+    let interrupted = store.recover().unwrap_or(0);
+
+    let allowed = string_set(&config, "allowed_numbers");
+    let groups = group_set(&config, "allowed_groups");
+    let free_groups = group_set(&config, "free_response_groups");
+    if allowed.is_empty() {
+        eprintln!("[signal] warning: nobody is allowlisted; every DM gets a pairing reply");
+    }
+
+    // Prove the daemon before the first subscribe: a dead socket is a
+    // setup problem, not a connectivity one.
+    let rpc = Rpc::from_config(&config)
+        .await
+        .map_err(|_| "cannot reach the signal-cli daemon; start it or run setup".to_string())?;
+
+    let daemon = Arc::new(Daemon {
+        config: config.clone(),
+        config_path: config_path.to_path_buf(),
+        store,
+        rpc: RwLock::new(rpc),
+        own_account,
+        allowed,
+        groups,
+        free_groups,
+        home_chat: crate::channels::signal::signal::cfg_str(&config, "home_chat").to_string(),
+        aliases: std::sync::RwLock::new(HashMap::new()),
+        commands: std::sync::RwLock::new(crate::channels::signal::commands::ListCache::default()),
+        acks: crate::channels::signal::busy::Acks::default(),
+        pager: crate::channels::signal::busy::Pager::new(4000, 60, "/"),
+    });
+
+    // Boot notice is computed now (it records lifecycle state) and posted
+    // after the first successful subscribe.
+    let gray_bin = Path::new(crate::channels::signal::signal::cfg_str(
+        &daemon.config,
+        "gray_bin",
+    ));
+    let mut notice = if crate::channels::signal::lifecycle::enabled(&daemon.config) {
+        crate::channels::signal::lifecycle::boot_via(gray_bin, &dir, interrupted).await
+    } else {
+        let _ = crate::channels::signal::lifecycle::boot(&dir);
+        None
+    };
+
+    // Workers drain the inbox; the receive loop only ever enqueues.
+    let workers = daemon
+        .config
+        .get("concurrency")
+        .and_then(Value::as_u64)
+        .unwrap_or(2)
+        .clamp(1, 16);
+    let stop = Arc::new(tokio::sync::Notify::new());
+    let mut handles = Vec::new();
+    for _ in 0..workers {
+        let d = daemon.clone();
+        let stop = stop.clone();
+        handles.push(tokio::spawn(async move {
+            loop {
+                match d.work().await {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(e) => eprintln!("[signal] worker error: {e}"),
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {},
+                    _ = stop.notified() => break,
+                }
+            }
+        }));
+    }
+
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+    {
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            shutdown.notify_waiters();
+        });
+    }
+
+    // The receive loop. Phase 1 keeps a subscribed connection alive
+    // (reconnect + resubscribe with backoff); phase 2 drains envelopes
+    // until the socket dies, then loops back.
+    let mut backoff_attempt: u64 = 0;
+    let stop_reason: Result<(), String> = 'outer: loop {
+        loop {
+            let subscribed = {
+                let rpc = daemon.rpc.read().await;
+                rpc.subscribe(&daemon.own_account).await.is_ok()
+            };
+            if subscribed {
+                backoff_attempt = 0;
+                if let Some(text) = notice.take()
+                    && !daemon.home_chat.is_empty()
+                {
+                    daemon
+                        .reply(&daemon.home_chat.clone(), &text, "boot notice")
+                        .await;
+                }
+                break;
+            }
+            match Rpc::from_config(&daemon.config).await {
+                Ok(fresh) => {
+                    *daemon.rpc.write().await = fresh;
+                }
+                Err(e) => {
+                    let wait = poll_backoff(backoff_attempt);
+                    backoff_attempt = backoff_attempt.saturating_add(1);
+                    eprintln!(
+                        "[signal] connect failed: {e}; retrying in {}s",
+                        wait.as_secs()
+                    );
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {},
+                        _ = shutdown.notified() => break 'outer Ok(()),
+                    }
+                }
+            }
+        }
+        eprintln!("[signal] subscribed to receive notifications");
+        loop {
+            let env = tokio::select! {
+                env = async {
+                    let rpc = daemon.rpc.read().await;
+                    rpc.next_envelope().await
+                } => env,
+                _ = shutdown.notified() => break 'outer Ok(()),
+            };
+            match env {
+                Some(envelope) => {
+                    backoff_attempt = 0;
+                    daemon.on_envelope(&envelope).await;
+                }
+                None => {
+                    eprintln!("[signal] connection lost; resubscribing");
+                    break;
+                }
+            }
+        }
+    };
+
+    // Goodbye notices are plain sends, bounded.
+    let gray_bin = Path::new(crate::channels::signal::signal::cfg_str(
+        &daemon.config,
+        "gray_bin",
+    ));
+    let goodbye = crate::channels::signal::lifecycle::stop_via(gray_bin, &dir).await;
+    if crate::channels::signal::lifecycle::enabled(&daemon.config) {
+        let running: Vec<String> = daemon
+            .store
+            .running_targets()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| i.target)
+            .collect();
+        let targets = crate::channels::signal::lifecycle::shutdown_targets(
+            &running,
+            &daemon.home_chat,
+            &goodbye,
+        );
+        let send = async {
+            for (target, text) in targets {
+                daemon.reply(&target, text, "shutdown notice").await;
+            }
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(6), send).await;
+    }
+
+    eprintln!("[signal] shutting down");
+    stop.notify_waiters();
+    for h in handles {
+        h.abort();
+    }
+    // If shutdown never ran inside the loop (early failure path), still
+    // record a clean exit so the next boot does not report a crash.
+    if std::fs::read(dir.join(crate::channels::signal::lifecycle::STATE_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|s| s.get("state").and_then(Value::as_str).map(str::to_string))
+        .as_deref()
+        == Some("running")
+    {
+        let restart = crate::channels::signal::lifecycle::restart_requested(&dir);
+        crate::channels::signal::lifecycle::mark_stopped(&dir, restart);
+    }
+    stop_reason
+}
