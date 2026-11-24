@@ -831,8 +831,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "gray-gateway"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -844,6 +850,7 @@ dependencies = [
  "env_logger",
  "futures",
  "futures-util",
+ "glob",
  "lettre",
  "libc",
  "log",

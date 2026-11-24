@@ -9,6 +9,7 @@ pub struct Part {
     pub description: &'static str,
 }
 
+#[derive(Clone)]
 pub struct Parts {
     on: BTreeMap<&'static str, bool>,
 }
