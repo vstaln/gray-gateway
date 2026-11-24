@@ -2,7 +2,6 @@
 //!
 //! One entry point ([`handle`]), one place that knows how to answer a
 //! Discord interaction. Everything here is the adapter around the pure
-//! logic in [`crate::channels::discord::commands`]: that module decides what a request *means*,
 //! this one executes it and renders the reply.
 //!
 //! Two reply rules that are easy to get wrong:

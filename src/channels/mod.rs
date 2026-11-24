@@ -1,11 +1,3 @@
-//! The chat channels, folded in as switchable parts of the gateway plugin.
-//!
-//! Each submodule was a standalone plugin binary and keeps its own config,
-//! state directory and service unit. What changes is the entry point: one
-//! gateway sidecar serves the tools, commands and hooks of every enabled
-//! channel, and `gray-gateway <channel> <args…>` runs what used to be
-//! `gray-<channel> <args…>`.
-
 #![allow(dead_code)]
 
 pub mod common;
@@ -30,7 +22,6 @@ use serde_json::Value;
 
 use crate::parts::{Part, Parts};
 
-/// Every channel part, in the order the manifest lists them.
 pub const PARTS: &[Part] = &[
     Part {
         name: "discord",
@@ -109,8 +100,6 @@ pub const PARTS: &[Part] = &[
     },
 ];
 
-/// Every channel's own manifest, enabled or not — used to answer
-/// `plugin/manifest` and to route a tool or command name to its owner.
 fn channel_manifest(name: &str) -> Value {
     match name {
         "discord" => discord::sidecar::MANIFEST.clone(),
@@ -132,8 +121,6 @@ fn channel_manifest(name: &str) -> Value {
     }
 }
 
-/// The config file a channel reads, resolved exactly as its standalone
-/// binary resolved it.
 pub fn config_path(name: &str) -> std::path::PathBuf {
     let path = match name {
         "discord" => discord::config::default_path(),
@@ -169,8 +156,6 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-/// The merged manifest: the gateway's own tools/commands, then every enabled
-/// channel's, with names untouched.
 pub fn manifest(parts: &Parts) -> Value {
     use serde_json::json;
     let mut tools = vec![crate::cron_tool::tool_def()];
@@ -244,7 +229,6 @@ pub fn manifest(parts: &Parts) -> Value {
     out
 }
 
-/// Which enabled channel, if any, claims a tool name.
 pub fn tool_owner(parts: &Parts, tool: &str) -> Option<&'static str> {
     PARTS
         .iter()
@@ -262,7 +246,6 @@ pub fn tool_owner(parts: &Parts, tool: &str) -> Option<&'static str> {
         .map(|p| p.name)
 }
 
-/// Which enabled channel claims a slash command.
 pub fn command_owner(parts: &Parts, command: &str) -> Option<&'static str> {
     let command = command.trim_start_matches('/');
     let with_slash = format!("/{command}");
@@ -277,13 +260,10 @@ pub fn command_owner(parts: &Parts, command: &str) -> Option<&'static str> {
         .map(|p| p.name)
 }
 
-/// Whether `name` is a channel part at all, enabled or not.
 pub fn is_part(name: &str) -> bool {
     PARTS.iter().any(|p| p.name == name)
 }
 
-/// Answer a `tool/call` for a channel tool. `None` means no enabled channel
-/// owns that name.
 pub async fn call_tool(parts: &Parts, params: &Value) -> Option<Value> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let owner = tool_owner(parts, name)?;
@@ -301,8 +281,6 @@ pub async fn call_tool(parts: &Parts, params: &Value) -> Option<Value> {
     })
 }
 
-/// Answer a `command/run` for a channel command. `None` means no enabled
-/// channel owns it.
 pub async fn run_command(parts: &Parts, params: &Value) -> Option<Value> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let owner = command_owner(parts, name)?;
@@ -333,7 +311,6 @@ fn small_dispatch(name: &str, method: &str, params: &Value) -> Value {
     }
 }
 
-/// The `prompt/context` text of every enabled channel, joined.
 pub fn prompt_context(parts: &Parts) -> Option<String> {
     let blocks: Vec<String> = PARTS
         .iter()
@@ -352,14 +329,6 @@ fn json_error(message: &str) -> Value {
     serde_json::json!({"content": message, "is_error": true})
 }
 
-/// Repoint every channel's existing service definition at this binary.
-///
-/// Runs when the sidecar starts, which is once per gray session, so an
-/// upgrade needs no manual step: the old standalone binaries are gone, and
-/// anything still exec-ing them is switched to `gray-gateway <channel> run`
-/// on the first session after the upgrade, with the supervisor told to pick
-/// it up. The rewrite is idempotent, so this happens once; a service that is
-/// not running is only rewritten, never started.
 pub fn adopt_services(parts: &Parts) {
     for part in PARTS.iter().filter(|p| parts.on(p.name)) {
         for path in common::service_migrate::adopt(part.name) {
@@ -373,15 +342,7 @@ pub fn adopt_services(parts: &Parts) {
     }
 }
 
-/// Run one channel's former CLI: `gray-gateway <channel> <args…>`.
-///
-/// Every former binary's surface — `setup`, `run`, `sidecar`, `install`,
-/// `status`, `doctor`, and the rest — is reachable this way, with the config
-/// path defaulted to the channel's own.
 pub fn run_cli(name: &str, argv: &[String], enabled: bool) -> anyhow::Result<()> {
-    // Repoint an existing unit before anything else: its exec line may name a
-    // binary this merge removed, and that must be fixed whether or not the
-    // part is on.
     if matches!(
         argv.first().map(String::as_str),
         Some("run" | "setup" | "install" | "restart" | "start" | "status")
@@ -400,8 +361,6 @@ pub fn run_cli(name: &str, argv: &[String], enabled: bool) -> anyhow::Result<()>
              `gray plugin enable gateway/{name}` turns it on"
         );
     }
-    // The former binaries read `env::args()`, program name included: a bare
-    // `gray-telegram` was the sidecar, and clap wants argv[0] too.
     let mut full = vec![format!("gray-gateway {name}")];
     full.extend(argv.iter().cloned());
     let code = match name {

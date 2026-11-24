@@ -14,7 +14,6 @@
 //! credentials into the channel.
 //!
 //! The sink also carries gray's streamed `text` rows, in order with the tool
-//! rows, so [`crate::channels::discord::stream`] can lay the turn out the way the bridge does. Text rows
 //! stay out of the bounded history: they would crowd the tool rows the
 //! optional end-of-turn card is built from.
 

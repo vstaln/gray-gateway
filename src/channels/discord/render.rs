@@ -181,7 +181,6 @@ pub fn card(title: &str, body: &str, accent: u32, actions: &[Value]) -> Result<V
 }
 
 /// Render the opt-in end-of-turn tally card (`activity_card`). Live
-/// narration and replies are plain Text Displays (see [`crate::channels::discord::stream`]).
 pub fn tool_card(text: &str) -> Result<Vec<Value>, String> {
     card("gray · done", text, QUIET_ACCENT, &[])
 }

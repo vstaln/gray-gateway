@@ -321,7 +321,6 @@ fn tool(name: &str, args: &Value) -> Value {
     }
 }
 
-/// Answer one protocol method the gateway routes to this channel.
 pub fn dispatch(method: &str, params: &Value) -> Value {
     if method == "plugin/manifest" {
         return manifest();

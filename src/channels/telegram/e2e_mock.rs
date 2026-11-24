@@ -217,8 +217,6 @@ async fn mock_bot_api_end_to_end() {
     crate::channels::telegram::config::atomic_json(&cfg_path, &cfg).unwrap();
 
     let mock = MockApi::start();
-    // SAFETY: the test harness sets this before any request is made and no
-    // other thread reads the environment concurrently.
     unsafe { std::env::set_var("GRAY_TELEGRAM_TEST_API_BASE", &mock.base) };
 
     let run_path = cfg_path.clone();
@@ -370,8 +368,6 @@ echo '{"protocol":1,"turn_id":"t1","session_id":"sess-1","type":"result","text":
     crate::channels::telegram::config::atomic_json(&cfg_path, &cfg).unwrap();
 
     let mock = MockApi::start();
-    // SAFETY: the test harness sets this before any request is made and no
-    // other thread reads the environment concurrently.
     unsafe { std::env::set_var("GRAY_TELEGRAM_TEST_API_BASE", &mock.base) };
 
     let run_path = cfg_path.clone();

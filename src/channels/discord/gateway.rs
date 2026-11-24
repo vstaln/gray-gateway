@@ -351,7 +351,6 @@ pub struct Runtime<R, D> {
     pub activity: Option<crate::channels::discord::activity::Sink>,
     last_typing: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, f64>>>,
     /// The live turn per channel/conversation: prose messages and tool
-    /// bubbles in channel order (see [`crate::channels::discord::stream`]).
     timelines: std::sync::Arc<
         tokio::sync::Mutex<
             std::collections::HashMap<String, crate::channels::discord::stream::Timeline>,

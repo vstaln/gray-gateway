@@ -216,9 +216,6 @@ fn fulfill_waiters(sh: &Arc<Mutex<Shared>>, id: &str, result: &Value) {
     }
 }
 
-/// The gateway sidecar's webchat entry: it hosts the page and pumps
-/// `host/run`, so a message from the browser reaches the session without the
-/// plugin copy of this loop.
 pub fn serve() -> std::io::Result<()> {
     let sh = Arc::new(Mutex::new(Shared {
         queue: VecDeque::new(),
@@ -310,8 +307,6 @@ pub fn serve() -> std::io::Result<()> {
     Ok(())
 }
 
-/// `gray-gateway webchat <args…>`: the former binary's verbs, with the
-/// bare invocation still meaning "serve".
 pub fn run(argv: &[String]) -> i32 {
     let args: Vec<String> = match argv.first().map(String::as_str) {
         Some("webchat") => argv[1..].to_vec(),
@@ -350,7 +345,6 @@ pub fn run(argv: &[String]) -> i32 {
 static BOUND: std::sync::OnceLock<Mutex<Option<Result<u16, String>>>> = std::sync::OnceLock::new();
 static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
-/// Answer one protocol method the gateway routes to this channel.
 pub fn dispatch(method: &str, _params: &Value) -> Value {
     if method == "plugin/manifest" {
         return manifest();

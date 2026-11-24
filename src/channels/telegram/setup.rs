@@ -392,8 +392,6 @@ async fn ask_token(
                 // spinning on it.
                 if std::env::var("TELEGRAM_BOT_TOKEN").is_ok() {
                     io.print_line(&format!("{why}; ignoring the environment token."));
-                    // SAFETY: setup is single-threaded; nothing else reads
-                    // the environment while the token prompt runs.
                     unsafe { std::env::remove_var("TELEGRAM_BOT_TOKEN") };
                 }
                 rejected += 1;

@@ -1,15 +1,5 @@
-//! Point an existing channel service at the gateway binary.
-//!
-//! A channel that was installed before the parts merge has a runit `run`
-//! script or a systemd user unit whose exec line names its own standalone
-//! binary (for example `~/.gray/plugins/discord/gray-discord`). That binary
-//! goes away when the plugin is replaced, so the unit is repointed at
-//! `gray-gateway <channel> run`, keeping every other argument, and the
-//! supervisor is told to pick it up.
-
 use std::path::{Path, PathBuf};
 
-/// One service definition found on disk.
 pub struct Definition {
     pub path: PathBuf,
     pub body: String,
@@ -22,9 +12,6 @@ pub enum Kind {
     Systemd,
 }
 
-/// The service names one channel actually uses: its runit service directory
-/// and its systemd unit file, both taken from that channel's own `service`
-/// module so they cannot drift from what `install` writes.
 pub struct Names {
     pub svc: &'static str,
     pub unit: &'static str,
@@ -69,8 +56,6 @@ pub fn names(channel: &str) -> Option<Names> {
     Some(Names { svc, unit })
 }
 
-/// Where this user's services live, in the order the channel services
-/// themselves resolve them.
 fn runit_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(d) = std::env::var_os("SVDIR") {
@@ -93,7 +78,6 @@ fn systemd_dir() -> Option<PathBuf> {
     crate::channels::common::config::user_home().map(|h| h.join(".config/systemd/user"))
 }
 
-/// Every definition for `channel` that exists, regardless of what it execs.
 pub fn find(channel: &str) -> Vec<Definition> {
     let mut out = Vec::new();
     let Some(n) = names(channel) else {
@@ -131,7 +115,6 @@ pub fn find(channel: &str) -> Vec<Definition> {
     out
 }
 
-/// The argv word this definition executes, if it can be read.
 fn exec_word(def: &Definition) -> Option<String> {
     match def.kind {
         Kind::Runit => def
@@ -164,7 +147,6 @@ fn current_binary() -> Option<PathBuf> {
     std::fs::canonicalize(std::env::current_exe().ok()?).ok()
 }
 
-/// The argv of a definition's exec line, shell-unquoted.
 fn exec_argv(def: &Definition) -> Vec<String> {
     let line = match def.kind {
         Kind::Runit => def
@@ -208,7 +190,6 @@ fn split_words(rest: &str) -> Vec<String> {
     words
 }
 
-/// Whether this definition already runs the gateway binary for `channel`.
 pub fn is_current(def: &Definition, channel: &str, exe: &Path) -> bool {
     let argv = exec_argv(def);
     let Some(first) = argv.first() else {
@@ -220,7 +201,6 @@ pub fn is_current(def: &Definition, channel: &str, exe: &Path) -> bool {
     canonical == exe && argv.get(1).map(String::as_str) == Some(channel)
 }
 
-/// Rewrite one definition so it execs `<exe> <channel> <rest>`.
 pub fn rewrite(def: &Definition, channel: &str, exe: &Path) -> Option<String> {
     let exe_s = exe.to_string_lossy();
     match def.kind {
@@ -273,8 +253,6 @@ pub fn rewrite(def: &Definition, channel: &str, exe: &Path) -> Option<String> {
     }
 }
 
-/// Everything after the old binary, dropping a `<channel>` already there so a
-/// second pass cannot stack prefixes.
 fn tail_after_old_argv(rest: &str, channel: &str, _kind: Kind) -> String {
     let mut tail = skip_words(rest, 1);
     if first_word(tail).as_deref() == Some(channel) {
@@ -283,8 +261,6 @@ fn tail_after_old_argv(rest: &str, channel: &str, _kind: Kind) -> String {
     tail.trim().to_string()
 }
 
-/// Drop the first `n` words and return the rest of the line exactly as it
-/// was written, so quoting and shell syntax such as `>> log 2>&1` survive.
 fn skip_words(s: &str, n: usize) -> &str {
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -337,11 +313,6 @@ fn systemd_quote(s: &str) -> String {
     )
 }
 
-/// Point every existing definition for `channel` at this build, and let a
-/// running daemon pick the new one up.
-///
-/// Returns the paths rewritten. A definition that already names this binary
-/// is left alone, so the second run changes nothing.
 pub fn adopt(channel: &str) -> Vec<PathBuf> {
     let changed = rewrite_changed(channel);
     if !changed.is_empty() {
@@ -350,8 +321,6 @@ pub fn adopt(channel: &str) -> Vec<PathBuf> {
     changed.into_iter().map(|(d, _)| d.path).collect()
 }
 
-/// Every definition for `channel` that now names something else, with the
-/// argument list it had before the rewrite.
 fn rewrite_changed(channel: &str) -> Vec<(Definition, Vec<String>)> {
     let Some(exe) = current_binary() else {
         return Vec::new();
@@ -375,8 +344,6 @@ fn rewrite_changed(channel: &str) -> Vec<(Definition, Vec<String>)> {
     changed
 }
 
-/// A runit `run` script must stay executable, so replace the contents
-/// through a sibling temp file and carry the mode across.
 #[cfg(unix)]
 fn write_preserving_mode(path: &Path, body: &str) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -401,13 +368,6 @@ fn have(tool: &str) -> bool {
     std::env::split_paths(&paths).any(|d| d.join(tool).is_file())
 }
 
-/// Let whichever supervisor exists pick up a rewritten definition.
-///
-/// runit re-reads the `run` script on its next start, so a restart is enough;
-/// systemd caches the unit, so a rewritten unit needs `daemon-reload` first.
-/// A service that is not running is only rewritten, never started: the user
-/// stopped it, and starting a bot they stopped is not ours to decide. A box
-/// with neither tool keeps the new file for the next boot.
 fn reload(channel: &str, changed: &[(Definition, Vec<String>)]) {
     let Some(n) = names(channel) else {
         return;
@@ -441,7 +401,6 @@ fn reload(channel: &str, changed: &[(Definition, Vec<String>)]) {
     }
 }
 
-/// Whether a process for this exact command line is running.
 fn is_running_argv(argv: &[String]) -> bool {
     let Some(binary) = argv.first() else {
         return false;

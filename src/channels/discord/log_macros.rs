@@ -1,5 +1,3 @@
-//! Timestamped log macros, path-accessible so every module can call them.
-
 /// `eprintln!` with an RFC3339 UTC timestamp prefix.
 macro_rules! eprintln_stamped {
     ($($arg:tt)*) => {

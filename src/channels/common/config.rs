@@ -1,7 +1,3 @@
-//! Config-file plumbing the bridges share: where a channel's JSON config
-//! lives, an atomic 0600 write, and the integer range check every
-//! `validate_config` runs.
-
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -20,16 +16,12 @@ pub fn user_home() -> Option<PathBuf> {
     }
 }
 
-/// `<home>/.config/gray-<channel>/config.json`, the path every channel kept
-/// as a standalone plugin.
 pub fn default_path(channel: &str) -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(format!(".config/gray-{channel}/config.json"))
 }
 
-/// The directory a channel's config lives in — where its pid file, log and
-/// lifecycle markers sit.
 pub fn config_dir_of(config_path: &Path) -> PathBuf {
     config_path
         .parent()
@@ -81,7 +73,6 @@ pub fn atomic_json(path: &Path, data: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Read + parse a config file; any failure maps to the setup hint.
 pub fn load(path: &Path) -> Result<Value, String> {
     std::fs::read(path)
         .ok()

@@ -227,7 +227,6 @@ pub fn cli(argv: &[String]) -> Result<String, String> {
     }
 }
 
-/// Answer one protocol method the gateway routes to this channel.
 pub fn dispatch(method: &str, params: &Value) -> Value {
     if method == "plugin/manifest" {
         return manifest();

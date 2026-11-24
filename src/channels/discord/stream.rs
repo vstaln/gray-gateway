@@ -625,7 +625,6 @@ impl Timeline {
     /// The requests due now. Posts go strictly in message order; an edit
     /// waits `gap` seconds after the message's last change (and out any
     /// backoff) unless the turn is `finishing`, when everything settles at
-    /// once. Tool messages edit no faster than [`crate::channels::discord::activity::TOOL_EDIT_GAP`].
     pub fn plan(&self, now: f64, gap: f64, finishing: bool) -> Vec<Op> {
         if self.lost {
             return Vec::new();

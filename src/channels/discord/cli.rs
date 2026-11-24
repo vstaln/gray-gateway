@@ -632,8 +632,6 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
     }
 }
 
-/// `gray-gateway discord <args…>`: this channel's former CLI, parsed the way
-/// the standalone binary parsed it.
 pub fn run_discord(argv: &[String]) -> Result<(), String> {
     let cli = Cli::try_parse_from(
         std::iter::once("gray-discord".to_string()).chain(argv.iter().cloned()),

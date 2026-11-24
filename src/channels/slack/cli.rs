@@ -421,8 +421,6 @@ fn verb_description(verb: &str) -> &'static str {
     }
 }
 
-/// `gray-gateway slack <args…>`: this channel's former CLI, parsed the way
-/// the standalone binary parsed it.
 pub fn run_slack(argv: &[String]) -> Result<(), String> {
     let cli =
         Cli::try_parse_from(std::iter::once("gray-slack".to_string()).chain(argv.iter().cloned()))
