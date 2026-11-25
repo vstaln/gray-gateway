@@ -104,9 +104,7 @@ impl Inbound {
                 _ => json!({}),
             };
         }
-        file_trigger::handle_file_trigger(&self.ft, req)
-            .0
-            .unwrap_or_else(|| json!({}))
+        result_of(file_trigger::handle_file_trigger(&self.ft, req).0)
     }
 
     fn call_tool(&self, parts: &Parts, req: &Value) -> Option<Value> {
