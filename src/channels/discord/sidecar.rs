@@ -124,6 +124,7 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
             }
         }, {
             "name": "discord_ui_schema",
+            "body": false,
             "label": "Discord UI Schema",
             "description": "Return the full Components V2 document reference: every component's fields, Discord's limits, and copy-ready examples.",
             "parameters": {
